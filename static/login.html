@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ログイン</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+    }
+    p { opacity: 0.6; font-size: 0.95rem; }
+  </style>
+</head>
+<body>
+  <p id="msg">ログイン画面へ移動しています…</p>
+  <script>
+    // 未認証時にサーバーが返す門番ページ。アプリ本体のUIは一切含まない。
+    // 役割: (1) Cognitoへのリダイレクト(PKCE) (2) コールバック(?code=)のトークン交換
+    (async () => {
+      const msg = document.getElementById('msg');
+      const b64url = (bytes) => btoa(String.fromCharCode(...bytes))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+      let cfg;
+      try {
+        cfg = await (await fetch('/api/auth/config')).json();
+      } catch (_) {
+        msg.textContent = '設定の取得に失敗しました。ページを再読み込みしてください。';
+        return;
+      }
+      if (!cfg.enabled) { location.replace('/'); return; }
+
+      // Cognitoからのコールバック: 認可コードをトークンに交換してCookieへ
+      const params = new URLSearchParams(location.search);
+      if (params.get('code')) {
+        const body = new URLSearchParams({
+          grant_type: 'authorization_code',
+          client_id: cfg.client_id,
+          code: params.get('code'),
+          redirect_uri: location.origin + '/',
+          code_verifier: sessionStorage.getItem('pkce_verifier') || '',
+        });
+        try {
+          const res = await fetch(`${cfg.domain}/oauth2/token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body,
+          });
+          if (res.ok) {
+            const tok = await res.json();
+            document.cookie =
+              `id_token=${tok.id_token}; Max-Age=${tok.expires_in}; Path=/; SameSite=Lax`;
+            location.replace('/');
+            return;
+          }
+        } catch (_) { /* 失敗時は下のログインリダイレクトへ */ }
+        msg.textContent = 'ログインに失敗しました。やり直します…';
+      }
+
+      // PKCEを準備してCognitoのログイン画面へ
+      const bytes = new Uint8Array(32);
+      crypto.getRandomValues(bytes);
+      const verifier = b64url(bytes);
+      sessionStorage.setItem('pkce_verifier', verifier);
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+      const q = new URLSearchParams({
+        client_id: cfg.client_id,
+        response_type: 'code',
+        scope: 'openid email profile',
+        redirect_uri: location.origin + '/',
+        code_challenge: b64url(new Uint8Array(digest)),
+        code_challenge_method: 'S256',
+      });
+      location.replace(`${cfg.domain}/oauth2/authorize?${q}`);
+    })();
+  </script>
+</body>
+</html>

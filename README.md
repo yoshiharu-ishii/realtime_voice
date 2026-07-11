@@ -49,8 +49,11 @@ uv run uvicorn main:app --port 8000
 
 `.env` に `COGNITO_*` を設定すると Amazon Cognito 認証が有効になる
 (未設定なら認証なしで動作)。ログインは Hosted UI への
-リダイレクト(認可コード + PKCE)で、バックエンドは HTTP API と
-WebSocket の両方で IDトークンを検証する。WebSocket は接続後の
+リダイレクト(認可コード + PKCE)で、IDトークンは Cookie に保持する。
+`GET /` はサーバー側で Cookie のトークンを検証し、未認証には
+アプリ本体のHTMLを返さず門番ページ(login.html)だけを返す
+(未認証者にUIを一瞬も見せない)。バックエンドは HTTP API と
+WebSocket の両方でも IDトークンを検証する。WebSocket は接続後の
 最初のメッセージ `proxy.auth {token}` で認証し、トークンをURLに
 載せない(アクセスログ対策)。ユーザー作成は管理者のみ
 (セルフサインアップ無効):

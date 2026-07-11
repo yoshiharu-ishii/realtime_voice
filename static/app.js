@@ -11,38 +11,37 @@ let ws = null;
 let talking = false;
 let fatalError = false; // APIキー未設定など、再接続しても直らないエラー
 
-// ---- 認証 (Cognito / PKCE) ----
-// サーバーの /api/auth/config が enabled:false ならすべてスキップされる
+// ---- 認証 (Cognito) ----
+// ログイン(PKCE)とトークン交換は門番ページ(login.html)が担当し、
+// このページはCookieのIDトークンを使うだけ。サーバーが / を返した時点で
+// Cookieは検証済みだが、期限切れに備えてクライアント側でも確認する。
 let authCfg = { enabled: false };
 
-function b64url(bytes) {
-  return btoa(String.fromCharCode(...bytes))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+function idToken() {
+  const m = document.cookie.match(/(?:^|; )id_token=([^;]*)/);
+  return m ? m[1] : '';
 }
 
-function idToken() {
-  return sessionStorage.getItem('id_token') || '';
+function clearToken() {
+  document.cookie = 'id_token=; Max-Age=0; Path=/; SameSite=Lax';
+}
+
+function jwtExpMs(token) {
+  try {
+    return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp * 1000;
+  } catch (_) {
+    return 0;
+  }
 }
 
 function authHeaders() {
   return authCfg.enabled && idToken() ? { Authorization: `Bearer ${idToken()}` } : {};
 }
 
-async function redirectToLogin() {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  const verifier = b64url(bytes);
-  sessionStorage.setItem('pkce_verifier', verifier);
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
-  const q = new URLSearchParams({
-    client_id: authCfg.client_id,
-    response_type: 'code',
-    scope: 'openid email profile',
-    redirect_uri: location.origin + '/',
-    code_challenge: b64url(new Uint8Array(digest)),
-    code_challenge_method: 'S256',
-  });
-  location.href = `${authCfg.domain}/oauth2/authorize?${q}`;
+function requireLogin() {
+  // Cookieを消してリロードすれば、サーバーが門番ページを返してくれる
+  clearToken();
+  location.reload();
 }
 
 function showUser() {
@@ -64,45 +63,18 @@ async function initAuth() {
     return true; // 設定が取れない場合は認証なしとして続行(サーバー側で拒否される)
   }
   if (!authCfg.enabled) return true;
-
-  // Cognitoからのコールバック(?code=)ならトークンに交換
-  const params = new URLSearchParams(location.search);
-  if (params.get('code')) {
-    const body = new URLSearchParams({
-      grant_type: 'authorization_code',
-      client_id: authCfg.client_id,
-      code: params.get('code'),
-      redirect_uri: location.origin + '/',
-      code_verifier: sessionStorage.getItem('pkce_verifier') || '',
-    });
-    try {
-      const res = await fetch(`${authCfg.domain}/oauth2/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body,
-      });
-      if (res.ok) {
-        const tok = await res.json();
-        sessionStorage.setItem('id_token', tok.id_token);
-        sessionStorage.setItem('token_exp', String(Date.now() + tok.expires_in * 1000));
-      }
-    } finally {
-      history.replaceState(null, '', '/'); // URLからcodeを消す
-    }
+  const token = idToken();
+  if (!token || Date.now() > jwtExpMs(token) - 60000) {
+    requireLogin();
+    return false; // リロード中
   }
-
-  const exp = Number(sessionStorage.getItem('token_exp') || 0);
-  if (idToken() && Date.now() < exp - 60000) {
-    showUser();
-    return true;
-  }
-  await redirectToLogin();
-  return false; // リダイレクト中
+  showUser();
+  return true;
 }
 
 function logout() {
-  sessionStorage.removeItem('id_token');
-  sessionStorage.removeItem('token_exp');
+  clearToken();
+  sessionStorage.removeItem('pkce_verifier');
   const q = new URLSearchParams({
     client_id: authCfg.client_id,
     logout_uri: location.origin + '/',
@@ -351,11 +323,9 @@ function connect() {
       }
       case 'proxy.error':
         if (ev.message?.includes('認証')) {
-          // トークン期限切れなど。破棄して再ログインへ
-          sessionStorage.removeItem('id_token');
-          sessionStorage.removeItem('token_exp');
+          // トークン期限切れなど。Cookieを破棄して門番ページ経由で再ログイン
           setStatus('認証が切れました。ログイン画面へ移動します…', true);
-          redirectToLogin();
+          requireLogin();
           return;
         }
         fatalError = true;
