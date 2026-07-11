@@ -1,0 +1,252 @@
+// Push-to-Talk クライアント
+// 押している間: マイク音声を PCM16(24kHz) で WebSocket に送信
+// 離した時: input_audio_buffer.commit + response.create で応答を要求
+// 応答音声: PCM16(24kHz) の delta を Web Audio で順次再生
+
+const statusEl = document.getElementById('status');
+const pttBtn = document.getElementById('ptt');
+const transcriptEl = document.getElementById('transcript');
+
+let ws = null;
+let talking = false;
+let fatalError = false; // APIキー未設定など、再接続しても直らないエラー
+let responseActive = false; // AIの応答が進行中か(response.cancel の送信判断に使う)
+let sentSamples = 0; // commit には最低 100ms(2400サンプル)必要
+
+// ---- 再生側 ----
+const playCtx = new (window.AudioContext || window.webkitAudioContext)();
+let playHead = 0; // 次のチャンクを再生する時刻
+let activeSources = [];
+
+function playPcm16Base64(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const pcm = new Int16Array(bytes.buffer);
+  if (pcm.length === 0) return;
+
+  const buf = playCtx.createBuffer(1, pcm.length, 24000);
+  const ch = buf.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+
+  const src = playCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(playCtx.destination);
+  const now = playCtx.currentTime;
+  if (playHead < now) playHead = now + 0.02;
+  src.start(playHead);
+  playHead += buf.duration;
+  activeSources.push(src);
+  src.onended = () => { activeSources = activeSources.filter(s => s !== src); };
+}
+
+function stopPlayback() {
+  for (const src of activeSources) { try { src.stop(); } catch (_) {} }
+  activeSources = [];
+  playHead = 0;
+}
+
+// ---- 録音側 ----
+let captureReady = false;
+
+async function setupCapture() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+  });
+  // 24kHz指定でコンテキストを作れれば、ブラウザ内蔵の高品質リサンプラが
+  // マイク入力を変換してくれる(ワークレット側の簡易リサンプラより高精度)
+  let ctx;
+  try {
+    ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+  } catch (_) {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  console.log('capture sample rate:', ctx.sampleRate);
+  await ctx.audioWorklet.addModule('/static/pcm-worklet.js');
+  const source = ctx.createMediaStreamSource(stream);
+  const node = new AudioWorkletNode(ctx, 'pcm-capture');
+  node.port.onmessage = (e) => {
+    if (!talking || !ws || ws.readyState !== WebSocket.OPEN) return;
+    const f32 = e.data;
+    const i16 = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++) {
+      const s = Math.max(-1, Math.min(1, f32[i]));
+      i16[i] = s < 0 ? s * 32768 : s * 32767;
+    }
+    sentSamples += i16.length;
+    const bytes = new Uint8Array(i16.buffer);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 8192) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    }
+    ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: btoa(bin) }));
+  };
+  source.connect(node);
+  captureReady = true;
+}
+
+// ---- 文字起こし表示 ----
+let currentAiTurn = null;
+let currentUserTurn = null;
+
+function appendTurn(who, cls) {
+  const div = document.createElement('div');
+  div.className = 'turn';
+  div.innerHTML = `<span class="who">${who}</span> <span class="text"></span>`;
+  transcriptEl.appendChild(div);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  return div.querySelector('.text');
+}
+
+// ---- WebSocket ----
+function setStatus(msg, isError = false) {
+  statusEl.textContent = msg;
+  statusEl.className = isError ? 'error' : '';
+}
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => setStatus('サーバー接続OK。OpenAIへ接続中…');
+
+  ws.onmessage = (e) => {
+    let ev;
+    try { ev = JSON.parse(e.data); } catch (_) { return; }
+
+    switch (ev.type) {
+      case 'proxy.ready':
+        setStatus(`接続完了 (model: ${ev.model})`);
+        pttBtn.disabled = false;
+        break;
+      case 'proxy.error':
+        fatalError = true;
+        setStatus(`${ev.message} (修正後にページを再読み込みしてください)`, true);
+        pttBtn.disabled = true;
+        break;
+      case 'error':
+        console.error('OpenAI error:', ev);
+        // キャンセル対象なしはタイミング起因で起こり得る無害なエラーなので表示しない
+        if (!`${ev.error?.message}`.includes('no active response')) {
+          setStatus(`エラー: ${ev.error?.message || JSON.stringify(ev)}`, true);
+        }
+        break;
+      // 応答音声 (GA / beta 両対応)
+      case 'response.output_audio.delta':
+      case 'response.audio.delta':
+        playPcm16Base64(ev.delta);
+        break;
+      // 自分の発話の文字起こし
+      case 'conversation.item.input_audio_transcription.delta':
+        if (!currentUserTurn) currentUserTurn = appendTurn('あなた');
+        if (currentUserTurn.dataset.pending) {
+          currentUserTurn.textContent = '';
+          delete currentUserTurn.dataset.pending;
+        }
+        currentUserTurn.textContent += ev.delta;
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        break;
+      case 'conversation.item.input_audio_transcription.completed':
+        if (!currentUserTurn) currentUserTurn = appendTurn('あなた');
+        currentUserTurn.textContent = ev.transcript;
+        delete currentUserTurn.dataset.pending;
+        currentUserTurn = null;
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        break;
+      case 'conversation.item.input_audio_transcription.failed':
+        if (currentUserTurn) currentUserTurn.textContent = '(文字起こしに失敗しました)';
+        currentUserTurn = null;
+        break;
+      // 応答の文字起こし
+      case 'response.output_audio_transcript.delta':
+      case 'response.audio_transcript.delta':
+        if (!currentAiTurn) currentAiTurn = appendTurn('AI');
+        currentAiTurn.textContent += ev.delta;
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        break;
+      case 'response.done':
+        responseActive = false;
+        currentAiTurn = null;
+        setStatus('待機中(ボタンを押して話してください)');
+        break;
+      case 'response.created':
+        responseActive = true;
+        setStatus('AIが応答中…');
+        break;
+    }
+  };
+
+  ws.onclose = () => {
+    pttBtn.disabled = true;
+    if (fatalError) return; // 設定エラー時はメッセージを残し再接続しない
+    setStatus('切断されました。3秒後に再接続します…', true);
+    setTimeout(connect, 3000);
+  };
+  ws.onerror = () => { if (!fatalError) setStatus('WebSocketエラー', true); };
+}
+
+// ---- Push-to-Talk 操作 ----
+async function startTalking() {
+  if (talking || pttBtn.disabled || !ws || ws.readyState !== WebSocket.OPEN) return;
+  if (playCtx.state === 'suspended') await playCtx.resume();
+  if (!captureReady) {
+    setStatus('マイク準備中…');
+    try {
+      await setupCapture();
+    } catch (err) {
+      setStatus(`マイクを使用できません: ${err.message}`, true);
+      return;
+    }
+  }
+  // 割り込み: 再生を止め、応答が進行中の場合のみキャンセルを送る
+  stopPlayback();
+  if (responseActive) {
+    ws.send(JSON.stringify({ type: 'response.cancel' }));
+    responseActive = false;
+  }
+  ws.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+  sentSamples = 0;
+  talking = true;
+  pttBtn.classList.add('talking');
+  pttBtn.textContent = '🔴 録音中… 離すと送信';
+  setStatus('録音中…');
+}
+
+function stopTalking() {
+  if (!talking) return;
+  talking = false;
+  pttBtn.classList.remove('talking');
+  pttBtn.textContent = '押している間だけ話す(またはスペースキー長押し)';
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (sentSamples < 2400) { // 100ms 未満は commit がエラーになるため破棄
+    ws.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+    setStatus('短すぎました。もう一度押して話してください');
+    return;
+  }
+  ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+  ws.send(JSON.stringify({ type: 'response.create' }));
+  currentUserTurn = appendTurn('あなた');
+  currentUserTurn.textContent = '(文字起こし中…)';
+  currentUserTurn.dataset.pending = '1';
+  setStatus('送信しました。応答を待っています…');
+}
+
+pttBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); startTalking(); });
+pttBtn.addEventListener('pointerup', stopTalking);
+pttBtn.addEventListener('pointerleave', stopTalking);
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && !e.repeat && document.activeElement !== pttBtn) {
+    e.preventDefault();
+    startTalking();
+  }
+});
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); stopTalking(); }
+});
+
+connect();

@@ -1,0 +1,39 @@
+# Push-to-Talk リアルタイム音声通話
+
+ブラウザ(Push-to-Talk) ↔ FastAPI(WebSocket中継) ↔ OpenAI Realtime API の構成。
+APIキーはサーバー側の `.env` にのみ保持し、ブラウザには一切渡らない。
+
+## 構成
+
+```
+ブラウザ                    FastAPI (main.py)              OpenAI
+─────────                  ─────────────────              ──────
+マイク → AudioWorklet       /ws で中継                     Realtime API
+  24kHz PCM16 化      ──→  許可イベントのみ転送      ──→   (gpt-realtime)
+スピーカー ← Web Audio ←──  サーバーイベントを転送    ←──   音声delta
+```
+
+- 押している間: `input_audio_buffer.append`(base64 PCM16 24kHz)を送信
+- 離した時: `input_audio_buffer.commit` + `response.create`
+- 応答中に押すと `response.cancel` + 再生停止で割り込み(バージイン)
+- サーバーVAD(`turn_detection`)は無効化し、PTTで発話区間を制御
+
+## セットアップ
+
+```bash
+cd realtime_voice
+cp .env.example .env   # OPENAI_API_KEY を設定
+python3 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
+```
+
+## 起動
+
+```bash
+./.venv/bin/uvicorn main:app --port 8000
+```
+
+ブラウザで http://localhost:8000 を開き、ボタン(またはスペースキー)を
+押している間だけ話す。マイク許可が必要。
+
+※ getUserMedia の制約上、localhost 以外で使う場合は HTTPS が必要。
