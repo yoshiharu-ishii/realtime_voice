@@ -11,6 +11,8 @@ let ws = null;
 let talking = false;
 let fatalError = false; // APIキー未設定など、再接続しても直らないエラー
 let responseActive = false; // AIの応答が進行中か(response.cancel の送信判断に使う)
+let personaChanging = false; // ペルソナ切替による意図的な再接続中か
+const personaSel = document.getElementById('persona');
 let sentSamples = 0; // commit には最低 100ms(2400サンプル)必要
 
 // ---- 再生側 ----
@@ -111,7 +113,8 @@ function setStatus(msg, isError = false) {
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  const persona = encodeURIComponent(personaSel.value || 'default');
+  ws = new WebSocket(`${proto}://${location.host}/ws?persona=${persona}`);
 
   ws.onopen = () => setStatus('サーバー接続OK。OpenAIへ接続中…');
 
@@ -121,7 +124,7 @@ function connect() {
 
     switch (ev.type) {
       case 'proxy.ready':
-        setStatus(`接続完了 (model: ${ev.model})`);
+        setStatus(`接続完了 (model: ${ev.model} / ペルソナ: ${ev.persona || '標準'})`);
         pttBtn.disabled = false;
         break;
       case 'proxy.search': {
@@ -188,6 +191,12 @@ function connect() {
 
   ws.onclose = () => {
     pttBtn.disabled = true;
+    responseActive = false;
+    if (personaChanging) { // ペルソナ切替時は即座に繋ぎ直す
+      personaChanging = false;
+      connect();
+      return;
+    }
     if (fatalError) return; // 設定エラー時はメッセージを残し再接続しない
     setStatus('切断されました。3秒後に再接続します…', true);
     setTimeout(connect, 3000);
@@ -303,4 +312,36 @@ window.addEventListener('keyup', (e) => {
   if (e.code === 'Space') { e.preventDefault(); stopTalking(); }
 });
 
-connect();
+// ---- ペルソナ ----
+async function initPersonas() {
+  try {
+    const res = await fetch('/api/personas');
+    const list = await res.json();
+    personaSel.innerHTML = '';
+    for (const p of list) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name;
+      personaSel.appendChild(opt);
+    }
+    const saved = localStorage.getItem('persona');
+    if (saved && list.some((p) => p.id === saved)) personaSel.value = saved;
+  } catch (_) {
+    // 一覧が取れなくても default で接続する
+  }
+}
+
+personaSel.addEventListener('change', () => {
+  localStorage.setItem('persona', personaSel.value);
+  const name = personaSel.selectedOptions[0]?.textContent || personaSel.value;
+  appendTurn('⚙️').textContent = `ペルソナを「${name}」に切り替え(新しいセッションを開始)`;
+  stopPlayback();
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    personaChanging = true;
+    ws.close(); // onclose が即座に新ペルソナで繋ぎ直す
+  } else {
+    connect();
+  }
+});
+
+initPersonas().then(connect);

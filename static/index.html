@@ -90,6 +90,22 @@
     #ptt.talking { background: var(--accent-active); }
     #ptt:disabled { opacity: 0.5; cursor: not-allowed; }
     .hint { font-size: 0.8rem; opacity: 0.6; text-align: center; margin: 0; }
+    #controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.9rem;
+    }
+    #persona {
+      flex: 1;
+      max-width: 240px;
+      padding: 6px 10px;
+      font-size: 0.9rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: transparent;
+      color: inherit;
+    }
     #reloadHistory {
       align-self: flex-end;
       padding: 6px 14px;
@@ -110,6 +126,10 @@
   </div>
 
   <div id="view-call">
+    <div id="controls">
+      <label for="persona">ペルソナ:</label>
+      <select id="persona"></select>
+    </div>
     <div id="status">接続中…</div>
     <div id="transcript"></div>
     <button id="ptt" disabled>押している間だけ話す(またはスペースキー長押し)</button>
