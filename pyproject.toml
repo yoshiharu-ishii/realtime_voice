@@ -9,4 +9,5 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "websockets>=13",
     "python-dotenv>=1.0",
+    "httpx>=0.28.1",
 ]
