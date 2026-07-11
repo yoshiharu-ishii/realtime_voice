@@ -164,6 +164,9 @@ async function setupCapture() {
     echoCancellation: true,
     noiseSuppression: true,
     autoGainControl: true,
+    // 対応ブラウザでは話者の声以外(BGM・環境音)の分離を要求する。
+    // 非対応環境では単に無視される(エラーにはならない)
+    voiceIsolation: true,
   };
   if (micSel.value) constraints.deviceId = { exact: micSel.value };
   let stream;
@@ -192,8 +195,9 @@ async function setupCapture() {
   const source = ctx.createMediaStreamSource(stream);
   const node = new AudioWorkletNode(ctx, 'pcm-capture');
   node.port.onmessage = (e) => {
-    if (!talking || !ws || ws.readyState !== WebSocket.OPEN) return;
     const f32 = e.data;
+    updateMeter(f32); // 録音中は常にレベルインジケーターを更新
+    if (!talking || !ws || ws.readyState !== WebSocket.OPEN) return;
     const i16 = new Int16Array(f32.length);
     for (let i = 0; i < f32.length; i++) {
       const s = Math.max(-1, Math.min(1, f32[i]));
@@ -212,6 +216,21 @@ async function setupCapture() {
   captureReady = true;
   // 権限取得後はデバイスのラベルが読めるようになるので一覧を更新
   initMics();
+}
+
+// ---- 入力レベルインジケーター(PTTボタン直上) ----
+// 録音中の音量をヒートマップ風に表示: 小さい=緑 → 大きい=黄→赤。
+// 喋っているのにバーが動かなければ、マイクが音を拾えていないと分かる
+const meterBar = document.getElementById('meterBar');
+
+function updateMeter(f32) {
+  let sum = 0;
+  for (let i = 0; i < f32.length; i++) sum += f32[i] * f32[i];
+  const rms = Math.sqrt(sum / f32.length);
+  const level = Math.min(1, rms * 4); // 0〜1に正規化(体感に合わせたスケール)
+  const hue = 120 * (1 - level); // 120=緑 → 0=赤
+  meterBar.style.width = `${(level * 100).toFixed(0)}%`;
+  meterBar.style.backgroundColor = `hsl(${hue.toFixed(0)}, 75%, 45%)`;
 }
 
 // ---- マイク選択 ----
@@ -237,6 +256,7 @@ async function initMics() {
 }
 
 micSel.addEventListener('change', () => {
+  micSel.blur(); // フォーカスを外し、スペースキーをPTTに戻す
   if (micSel.value) localStorage.setItem('micId', micSel.value);
   else localStorage.removeItem('micId');
   // 次にボタンを押したとき、選択したマイクで録音チェーンを作り直す
@@ -443,6 +463,7 @@ function stopTalking() {
   talking = false;
   pttBtn.classList.remove('talking');
   pttBtn.textContent = PTT_LABEL;
+  meterBar.style.width = '0%';
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   if (sentSamples < 2400) { // 100ms 未満は commit がエラーになるため破棄
     ws.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
@@ -536,14 +557,24 @@ document.getElementById('reloadHistory').addEventListener('click', loadHistory);
 pttBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); startTalking(); });
 pttBtn.addEventListener('pointerup', stopTalking);
 pttBtn.addEventListener('pointerleave', stopTalking);
+// セレクトやボタンにフォーカスがある間は、スペースはその部品の操作
+// (ドロップダウンを開く等)なのでPTTに使わない。ペルソナ切替の連打事故防止
+function isFormControlFocused() {
+  const tag = document.activeElement?.tagName;
+  return tag === 'SELECT' || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON';
+}
+
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'Space' && !e.repeat && document.activeElement !== pttBtn) {
+  if (e.code === 'Space' && !e.repeat && !isFormControlFocused()) {
     e.preventDefault();
     startTalking();
   }
 });
 window.addEventListener('keyup', (e) => {
-  if (e.code === 'Space') { e.preventDefault(); stopTalking(); }
+  if (e.code === 'Space' && !isFormControlFocused()) {
+    e.preventDefault();
+    stopTalking();
+  }
 });
 
 // ---- ペルソナ ----
@@ -566,6 +597,7 @@ async function initPersonas() {
 }
 
 personaSel.addEventListener('change', () => {
+  personaSel.blur(); // フォーカスを外し、スペースキーをPTTに戻す
   localStorage.setItem('persona', personaSel.value);
   const name = personaSel.selectedOptions[0]?.textContent || personaSel.value;
   appendTurn('⚙️').textContent = `ペルソナを「${name}」に切り替え(新しいセッションを開始)`;
