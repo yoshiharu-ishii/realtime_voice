@@ -75,6 +75,11 @@ async function initAuth() {
 function logout() {
   clearToken();
   sessionStorage.removeItem('pkce_verifier');
+  // 門番ページが「ログアウトしました」と出せるようにフラグを残す
+  sessionStorage.setItem('logging_out', '1');
+  setStatus('ログアウトしています…');
+  pttBtn.disabled = true;
+  document.getElementById('logoutBtn').disabled = true;
   const q = new URLSearchParams({
     client_id: authCfg.client_id,
     logout_uri: location.origin + '/',
