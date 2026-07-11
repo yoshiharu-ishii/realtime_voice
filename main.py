@@ -17,7 +17,15 @@ import httpx
 import jwt as pyjwt
 import websockets
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from jwt import PyJWKClient
@@ -466,7 +474,18 @@ async def relay(browser_ws: WebSocket) -> None:
 
 
 @app.get("/")
-async def index() -> FileResponse:
+async def index(request: Request) -> FileResponse:
+    """認証有効時はCookieのIDトークンを検証してからアプリ本体を返す。
+
+    未認証にはアプリのUIを一切見せず、門番ページ(login.html)だけを返す。
+    これで「一瞬アプリが映る」フラッシュも、UI構造の情報開示もなくなる。
+    """
+    if AUTH_ENABLED:
+        token = request.cookies.get("id_token", "")
+        try:
+            await asyncio.to_thread(verify_token, token)
+        except Exception:
+            return FileResponse(BASE_DIR / "static" / "login.html")
     return FileResponse(BASE_DIR / "static" / "index.html")
 
 
