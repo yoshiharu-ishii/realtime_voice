@@ -18,12 +18,16 @@
   </style>
 </head>
 <body>
-  <p id="msg">ログイン画面へ移動しています…</p>
+  <p id="msg">お待ちください…</p>
   <script>
     // 未認証時にサーバーが返す門番ページ。アプリ本体のUIは一切含まない。
     // 役割: (1) Cognitoへのリダイレクト(PKCE) (2) コールバック(?code=)のトークン交換
     (async () => {
       const msg = document.getElementById('msg');
+      // 状態に応じてメッセージを出し分ける
+      // (Cognitoへ向かう時と、戻ってきてログイン処理中の時は別物)
+      const isCallback = new URLSearchParams(location.search).has('code');
+      msg.textContent = isCallback ? 'ログインしています…' : 'ログイン画面へ移動しています…';
       const b64url = (bytes) => btoa(String.fromCharCode(...bytes))
         .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
