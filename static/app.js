@@ -50,16 +50,39 @@ function stopPlayback() {
 
 // ---- 録音側 ----
 let captureReady = false;
+let captureStream = null;
+let captureCtx = null;
+const micSel = document.getElementById('mic');
+
+function teardownCapture() {
+  if (captureStream) captureStream.getTracks().forEach((t) => t.stop());
+  if (captureCtx) captureCtx.close().catch(() => {});
+  captureStream = null;
+  captureCtx = null;
+  captureReady = false;
+}
 
 async function setupCapture() {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 1,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-  });
+  const constraints = {
+    channelCount: 1,
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
+  if (micSel.value) constraints.deviceId = { exact: micSel.value };
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+  } catch (err) {
+    if (!micSel.value) throw err;
+    // 選択したマイクが外された等で使えない場合は既定のマイクにフォールバック
+    delete constraints.deviceId;
+    micSel.value = '';
+    localStorage.removeItem('micId');
+    stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+    setStatus('選択したマイクが使えないため、既定のマイクに切り替えました');
+  }
+  captureStream = stream;
   // 24kHz指定でコンテキストを作れれば、ブラウザ内蔵の高品質リサンプラが
   // マイク入力を変換してくれる(ワークレット側の簡易リサンプラより高精度)
   let ctx;
@@ -89,8 +112,47 @@ async function setupCapture() {
     ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: btoa(bin) }));
   };
   source.connect(node);
+  captureCtx = ctx;
   captureReady = true;
+  // 権限取得後はデバイスのラベルが読めるようになるので一覧を更新
+  initMics();
 }
+
+// ---- マイク選択 ----
+async function initMics() {
+  let devices;
+  try {
+    devices = await navigator.mediaDevices.enumerateDevices();
+  } catch (_) {
+    return; // 列挙できない環境では「既定のマイク」のみ
+  }
+  const mics = devices.filter((d) => d.kind === 'audioinput');
+  const current = micSel.value;
+  micSel.innerHTML = '<option value="">既定のマイク</option>';
+  mics.forEach((d, i) => {
+    if (!d.deviceId || d.deviceId === 'default') return;
+    const opt = document.createElement('option');
+    opt.value = d.deviceId;
+    opt.textContent = d.label || `マイク ${i + 1}`;
+    micSel.appendChild(opt);
+  });
+  const saved = current || localStorage.getItem('micId') || '';
+  if ([...micSel.options].some((o) => o.value === saved)) micSel.value = saved;
+}
+
+micSel.addEventListener('change', () => {
+  if (micSel.value) localStorage.setItem('micId', micSel.value);
+  else localStorage.removeItem('micId');
+  // 次にボタンを押したとき、選択したマイクで録音チェーンを作り直す
+  teardownCapture();
+  const label = micSel.selectedOptions[0]?.textContent || '既定のマイク';
+  setStatus(`マイクを「${label}」に切り替えました`);
+});
+
+if (navigator.mediaDevices?.addEventListener) {
+  navigator.mediaDevices.addEventListener('devicechange', initMics);
+}
+initMics();
 
 // ---- 文字起こし表示 ----
 let currentAiTurn = null;
