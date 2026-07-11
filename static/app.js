@@ -236,6 +236,55 @@ function stopTalking() {
   setStatus('送信しました。応答を待っています…');
 }
 
+// ---- タブ切り替えと履歴表示 ----
+async function loadHistory() {
+  const listEl = document.getElementById('historyList');
+  listEl.textContent = '読み込み中…';
+  let sessions;
+  try {
+    const res = await fetch('/api/history');
+    sessions = await res.json();
+  } catch (err) {
+    listEl.textContent = `履歴の取得に失敗しました: ${err.message}`;
+    return;
+  }
+  listEl.innerHTML = '';
+  if (!sessions.length) {
+    listEl.textContent = 'まだ履歴がありません。通話するとここに保存されます。';
+    return;
+  }
+  for (const s of sessions) {
+    const sec = document.createElement('section');
+    sec.className = 'hist-session';
+    const h = document.createElement('h3');
+    h.textContent = `${s.started_at.replace('T', ' ')} — ${s.messages.length}件`;
+    sec.appendChild(h);
+    for (const m of s.messages) {
+      const div = document.createElement('div');
+      div.className = 'turn';
+      const who = document.createElement('span');
+      who.className = 'who';
+      who.textContent = m.role === 'user' ? 'あなた' : 'AI';
+      const text = document.createElement('span');
+      text.textContent = ' ' + m.text;
+      div.append(who, text);
+      sec.appendChild(div);
+    }
+    listEl.appendChild(sec);
+  }
+}
+
+document.querySelectorAll('.tab').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b === btn));
+    const tab = btn.dataset.tab;
+    document.getElementById('view-call').hidden = tab !== 'call';
+    document.getElementById('view-history').hidden = tab !== 'history';
+    if (tab === 'history') loadHistory();
+  });
+});
+document.getElementById('reloadHistory').addEventListener('click', loadHistory);
+
 pttBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); startTalking(); });
 pttBtn.addEventListener('pointerup', stopTalking);
 pttBtn.addEventListener('pointerleave', stopTalking);
