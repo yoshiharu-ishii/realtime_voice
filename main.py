@@ -27,13 +27,58 @@ REALTIME_MODEL = os.getenv("REALTIME_MODEL", "gpt-realtime")
 VOICE = os.getenv("REALTIME_VOICE", "marin")
 TRANSCRIBE_MODEL = os.getenv("REALTIME_TRANSCRIBE_MODEL", "gpt-4o-transcribe")
 SEARCH_MODEL = os.getenv("SEARCH_MODEL", "gpt-5-mini")
-INSTRUCTIONS = os.getenv(
-    "REALTIME_INSTRUCTIONS",
-    "あなたは親切な音声アシスタントです。日本語で簡潔に応答してください。"
+
+# ---- ペルソナ ----
+PERSONA_DIR = BASE_DIR / "personas"
+
+# どのペルソナにも必ず付く共通ルール(検索の使用と作話防止)
+COMMON_RULES = (
+    "\n\n【共通ルール】応答は日本語で、音声向けに簡潔にすること。"
     "最近の出来事・人物・統計・ニュースなど、学習データにない可能性がある事実を"
     "聞かれたら、必ず web_search ツールで調べてから答えること。"
-    "調べても分からないことは、推測で断定せず正直に「分からない」と言うこと。",
+    "調べても分からないことは、推測で断定せず正直に「分からない」と言うこと。"
 )
+
+FALLBACK_PERSONA = {
+    "id": "default",
+    "name": "標準アシスタント",
+    "voice": VOICE,
+    "instructions": "あなたは親切な音声アシスタントです。" + COMMON_RULES,
+}
+
+
+def parse_persona(persona_id: str, text: str) -> dict:
+    """personas/*.md の frontmatter(name, voice)と本文(instructions)を解釈する。"""
+    name, voice, body = persona_id, VOICE, text
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) >= 3:
+            meta, body = parts[1], parts[2]
+            for line in meta.strip().splitlines():
+                key, _, value = line.partition(":")
+                if key.strip() == "name":
+                    name = value.strip()
+                elif key.strip() == "voice":
+                    voice = value.strip()
+    return {
+        "id": persona_id,
+        "name": name,
+        "voice": voice,
+        "instructions": body.strip() + COMMON_RULES,
+    }
+
+
+def load_persona(persona_id: str) -> dict:
+    """ペルソナを毎回ファイルから読む(編集がサーバー再起動なしで反映される)。"""
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", persona_id or ""):
+        persona_id = "default"
+    path = PERSONA_DIR / f"{persona_id}.md"
+    if not path.is_file():
+        path = PERSONA_DIR / "default.md"
+        persona_id = "default"
+    if not path.is_file():
+        return FALLBACK_PERSONA
+    return parse_persona(persona_id, path.read_text(encoding="utf-8"))
 
 OPENAI_WS_URL = f"wss://api.openai.com/v1/realtime?model={REALTIME_MODEL}"
 
@@ -157,14 +202,14 @@ async def run_web_search(api_key: str, query: str) -> str:
     return text or "検索結果を取得できませんでした。"
 
 
-def session_update_event() -> dict:
+def session_update_event(persona: dict) -> dict:
     """Push-to-Talk 用のセッション設定(サーバーVADは無効化し、手動commitで区切る)。"""
     return {
         "type": "session.update",
         "session": {
             "type": "realtime",
             "output_modalities": ["audio"],
-            "instructions": INSTRUCTIONS,
+            "instructions": persona["instructions"],
             "tools": [WEB_SEARCH_TOOL],
             "tool_choice": "auto",
             "audio": {
@@ -175,16 +220,31 @@ def session_update_event() -> dict:
                 },
                 "output": {
                     "format": {"type": "audio/pcm", "rate": 24000},
-                    "voice": VOICE,
+                    "voice": persona["voice"],
                 },
             },
         },
     }
 
 
+@app.get("/api/personas")
+def personas() -> list:
+    """personas/ ディレクトリのペルソナ一覧(default先頭、あとはファイル名順)。"""
+    items = []
+    if PERSONA_DIR.is_dir():
+        for path in sorted(PERSONA_DIR.glob("*.md")):
+            p = parse_persona(path.stem, path.read_text(encoding="utf-8"))
+            items.append({"id": p["id"], "name": p["name"]})
+    if not items:
+        items.append({"id": "default", "name": FALLBACK_PERSONA["name"]})
+    items.sort(key=lambda x: x["id"] != "default")  # defaultを先頭に
+    return items
+
+
 @app.websocket("/ws")
 async def relay(browser_ws: WebSocket) -> None:
     await browser_ws.accept()
+    persona = load_persona(browser_ws.query_params.get("persona", "default"))
 
     # 接続ごとに .env を再読み込み(キー追記後のサーバー再起動を不要にする)
     load_dotenv(BASE_DIR / ".env", override=True)
@@ -212,8 +272,10 @@ async def relay(browser_ws: WebSocket) -> None:
     session_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
 
     async with openai_ws:
-        await openai_ws.send(json.dumps(session_update_event()))
-        await browser_ws.send_json({"type": "proxy.ready", "model": REALTIME_MODEL})
+        await openai_ws.send(json.dumps(session_update_event(persona), ensure_ascii=False))
+        await browser_ws.send_json(
+            {"type": "proxy.ready", "model": REALTIME_MODEL, "persona": persona["name"]}
+        )
 
         async def browser_to_openai() -> None:
             while True:
