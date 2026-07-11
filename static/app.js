@@ -173,7 +173,31 @@ function setStatus(msg, isError = false) {
   statusEl.className = isError ? 'error' : '';
 }
 
+let reconnectTimer = null;
+
 function connect() {
+  // 多重接続の防止: 予約済みの再接続タイマーを消し、旧ソケットは
+  // イベントハンドラを外してから閉じる(残った旧セッションの応答が
+  // 画面や音声に混ざる事故を防ぐ)
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (ws) {
+    ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+    try { ws.close(); } catch (_) {}
+  }
+  // 前のセッションの表示・再生状態をリセット
+  stopPlayback();
+  currentAiTurn = null;
+  currentUserTurn = null;
+  responseActive = false;
+  if (talking) { // マイク押下中に切り替わった場合は録音状態も解除
+    talking = false;
+    pttBtn.classList.remove('talking');
+    pttBtn.textContent = '押している間だけ話す(またはスペースキー長押し)';
+  }
+
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const persona = encodeURIComponent(personaSel.value || 'default');
   ws = new WebSocket(`${proto}://${location.host}/ws?persona=${persona}`);
@@ -246,6 +270,9 @@ function connect() {
         break;
       case 'response.created':
         responseActive = true;
+        // 応答ごとに表示ターンを分ける(連続する応答の文字起こしが
+        // 同じ行に連結されるのを防ぐ)
+        currentAiTurn = null;
         setStatus('AIが応答中…');
         break;
     }
@@ -261,7 +288,8 @@ function connect() {
     }
     if (fatalError) return; // 設定エラー時はメッセージを残し再接続しない
     setStatus('切断されました。3秒後に再接続します…', true);
-    setTimeout(connect, 3000);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connect, 3000);
   };
   ws.onerror = () => { if (!fatalError) setStatus('WebSocketエラー', true); };
 }
