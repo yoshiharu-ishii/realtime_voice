@@ -583,6 +583,10 @@ personaSel.addEventListener('change', () => {
   // 通常はサーバー側のリダイレクトで浄化される)
   if (location.search) history.replaceState(null, '', location.pathname);
   if (!(await initAuth())) return; // ログイン画面へリダイレクト中
+  // アプリが正常起動した = ログインが成立した時だけ、門番ページの
+  // ループガード用カウンタをリセットする
+  sessionStorage.removeItem('auth_redirects');
+  sessionStorage.removeItem('login_failures');
   await initPersonas();
   connect();
 })();

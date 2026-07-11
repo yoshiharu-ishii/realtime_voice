@@ -64,9 +64,15 @@
           });
           if (res.ok) {
             const tok = await res.json();
-            sessionStorage.removeItem('login_failures');
             document.cookie =
               `id_token=${tok.id_token}; Max-Age=${tok.expires_in}; Path=/; SameSite=Lax`;
+            // Cookieが実際に保存できたか確認(ブロックされているとここで
+            // 検知しない限り、ログイン画面との無限ループになる)
+            if (!document.cookie.includes('id_token=')) {
+              msg.textContent =
+                'Cookieを保存できないためログインできません。ブラウザのCookie設定を確認してください。';
+              return;
+            }
             location.replace('/');
             return;
           }
@@ -84,6 +90,18 @@
         }
         msg.textContent = 'ログインに失敗しました。ログイン画面へ移動します…';
         await new Promise((r) => setTimeout(r, 1500)); // メッセージを読める時間を確保
+      }
+
+      // ループガード: ログイン画面への往復回数を数える(アプリが正常に
+      // 起動したときだけ app.js がリセットする)。交換の成否に関係なく
+      // 数えるので、「交換は成功するがCookieが効かない」型のループも止まる
+      const redirects = Number(sessionStorage.getItem('auth_redirects') || 0) + 1;
+      sessionStorage.setItem('auth_redirects', String(redirects));
+      if (redirects >= 4) {
+        msg.textContent =
+          'ログイン画面への移動を繰り返しているため中断しました。'
+          + 'ブラウザのCookie設定やサーバーのCognito設定を確認し、ページを再読み込みしてください。';
+        return;
       }
 
       // PKCEを準備してCognitoのログイン画面へ
