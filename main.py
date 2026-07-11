@@ -14,11 +14,13 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
+import jwt as pyjwt
 import websockets
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from jwt import PyJWKClient
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -93,6 +95,62 @@ ALLOWED_CLIENT_EVENTS = {
 
 app = FastAPI()
 
+# ---- Cognito認証 ----
+# COGNITO_* が設定されていなければ認証なしで動作する(ローカル開発用)
+COGNITO_REGION = os.getenv("COGNITO_REGION", "")
+COGNITO_USER_POOL_ID = os.getenv("COGNITO_USER_POOL_ID", "")
+COGNITO_CLIENT_ID = os.getenv("COGNITO_CLIENT_ID", "")
+COGNITO_DOMAIN = os.getenv("COGNITO_DOMAIN", "").rstrip("/")
+AUTH_ENABLED = bool(COGNITO_REGION and COGNITO_USER_POOL_ID and COGNITO_CLIENT_ID)
+COGNITO_ISSUER = (
+    f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/{COGNITO_USER_POOL_ID}"
+)
+
+_jwks_client: PyJWKClient | None = None
+
+
+def verify_token(token: str) -> dict:
+    """Cognito発行のIDトークンを検証してクレームを返す。失敗時は例外。"""
+    global _jwks_client
+    if _jwks_client is None:
+        _jwks_client = PyJWKClient(f"{COGNITO_ISSUER}/.well-known/jwks.json")
+    key = _jwks_client.get_signing_key_from_jwt(token).key
+    claims = pyjwt.decode(
+        token,
+        key,
+        algorithms=["RS256"],
+        audience=COGNITO_CLIENT_ID,
+        issuer=COGNITO_ISSUER,
+    )
+    if claims.get("token_use") != "id":
+        raise ValueError("IDトークンではありません")
+    return claims
+
+
+def require_auth(authorization: str = Header(default="")) -> dict:
+    """HTTP API用の認証依存。認証無効時は素通し。"""
+    if not AUTH_ENABLED:
+        return {}
+    token = authorization.removeprefix("Bearer ").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="認証が必要です")
+    try:
+        return verify_token(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="トークンが無効です")
+
+
+@app.get("/api/auth/config")
+def auth_config() -> dict:
+    """フロントがログインURLを組むための公開設定(シークレットは含まない)。"""
+    return {
+        "enabled": AUTH_ENABLED,
+        "domain": COGNITO_DOMAIN,
+        "client_id": COGNITO_CLIENT_ID,
+        "region": COGNITO_REGION,
+    }
+
+
 # ---- チャット履歴 (SQLite) ----
 DB_PATH = BASE_DIR / "chat_history.db"
 
@@ -129,7 +187,7 @@ def save_message(session_id: str, role: str, text: str, persona: str = "") -> No
 
 
 @app.get("/api/history")
-def history(limit: int = 30) -> list:
+def history(limit: int = 30, user: dict = Depends(require_auth)) -> list:
     """セッション単位でグループ化した履歴を新しい順に返す。"""
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
@@ -237,7 +295,7 @@ def session_update_event(persona: dict) -> dict:
 
 
 @app.get("/api/personas")
-def personas() -> list:
+def personas(user: dict = Depends(require_auth)) -> list:
     """personas/ ディレクトリのペルソナ一覧(default先頭、あとはファイル名順)。"""
     items = []
     if PERSONA_DIR.is_dir():
@@ -253,6 +311,25 @@ def personas() -> list:
 @app.websocket("/ws")
 async def relay(browser_ws: WebSocket) -> None:
     await browser_ws.accept()
+
+    # 認証: 最初のメッセージで proxy.auth {token} を要求
+    # (トークンをURLに載せるとアクセスログに残るため、メッセージで受け取る)
+    user_email = ""
+    if AUTH_ENABLED:
+        try:
+            raw = await asyncio.wait_for(browser_ws.receive_text(), timeout=10)
+            ev = json.loads(raw)
+            if ev.get("type") != "proxy.auth":
+                raise ValueError("最初のメッセージが proxy.auth ではない")
+            claims = await asyncio.to_thread(verify_token, ev.get("token", ""))
+            user_email = claims.get("email", "")
+        except Exception:
+            await browser_ws.send_json(
+                {"type": "proxy.error", "message": "認証に失敗しました。再ログインしてください"}
+            )
+            await browser_ws.close()
+            return
+
     persona = load_persona(browser_ws.query_params.get("persona", "default"))
 
     # 接続ごとに .env を再読み込み(キー追記後のサーバー再起動を不要にする)
@@ -283,7 +360,12 @@ async def relay(browser_ws: WebSocket) -> None:
     async with openai_ws:
         await openai_ws.send(json.dumps(session_update_event(persona), ensure_ascii=False))
         await browser_ws.send_json(
-            {"type": "proxy.ready", "model": REALTIME_MODEL, "persona": persona["name"]}
+            {
+                "type": "proxy.ready",
+                "model": REALTIME_MODEL,
+                "persona": persona["name"],
+                "user": user_email,
+            }
         )
 
         async def browser_to_openai() -> None:

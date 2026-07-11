@@ -122,6 +122,20 @@
       color: inherit;
       cursor: pointer;
     }
+    #userInfo {
+      margin-left: auto;
+      font-size: 0.8rem;
+      opacity: 0.7;
+    }
+    #logoutBtn {
+      padding: 6px 10px;
+      font-size: 0.8rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -137,6 +151,8 @@
       <select id="persona"></select>
       <label for="mic">🎤:</label>
       <select id="mic"><option value="">既定のマイク</option></select>
+      <span id="userInfo" hidden></span>
+      <button id="logoutBtn" hidden>ログアウト</button>
     </div>
     <div id="status">接続中…</div>
     <div id="transcript"></div>

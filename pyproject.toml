@@ -10,4 +10,5 @@ dependencies = [
     "websockets>=13",
     "python-dotenv>=1.0",
     "httpx>=0.28.1",
+    "pyjwt[crypto]>=2.13.0",
 ]

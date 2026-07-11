@@ -10,6 +10,107 @@ const transcriptEl = document.getElementById('transcript');
 let ws = null;
 let talking = false;
 let fatalError = false; // APIキー未設定など、再接続しても直らないエラー
+
+// ---- 認証 (Cognito / PKCE) ----
+// サーバーの /api/auth/config が enabled:false ならすべてスキップされる
+let authCfg = { enabled: false };
+
+function b64url(bytes) {
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function idToken() {
+  return sessionStorage.getItem('id_token') || '';
+}
+
+function authHeaders() {
+  return authCfg.enabled && idToken() ? { Authorization: `Bearer ${idToken()}` } : {};
+}
+
+async function redirectToLogin() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  const verifier = b64url(bytes);
+  sessionStorage.setItem('pkce_verifier', verifier);
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  const q = new URLSearchParams({
+    client_id: authCfg.client_id,
+    response_type: 'code',
+    scope: 'openid email profile',
+    redirect_uri: location.origin + '/',
+    code_challenge: b64url(new Uint8Array(digest)),
+    code_challenge_method: 'S256',
+  });
+  location.href = `${authCfg.domain}/oauth2/authorize?${q}`;
+}
+
+function showUser() {
+  try {
+    const payload = JSON.parse(
+      atob(idToken().split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))
+    );
+    const info = document.getElementById('userInfo');
+    info.textContent = payload.email || payload['cognito:username'] || '';
+    info.hidden = false;
+    document.getElementById('logoutBtn').hidden = false;
+  } catch (_) { /* 表示だけなので失敗しても続行 */ }
+}
+
+async function initAuth() {
+  try {
+    authCfg = await (await fetch('/api/auth/config')).json();
+  } catch (_) {
+    return true; // 設定が取れない場合は認証なしとして続行(サーバー側で拒否される)
+  }
+  if (!authCfg.enabled) return true;
+
+  // Cognitoからのコールバック(?code=)ならトークンに交換
+  const params = new URLSearchParams(location.search);
+  if (params.get('code')) {
+    const body = new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: authCfg.client_id,
+      code: params.get('code'),
+      redirect_uri: location.origin + '/',
+      code_verifier: sessionStorage.getItem('pkce_verifier') || '',
+    });
+    try {
+      const res = await fetch(`${authCfg.domain}/oauth2/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+      });
+      if (res.ok) {
+        const tok = await res.json();
+        sessionStorage.setItem('id_token', tok.id_token);
+        sessionStorage.setItem('token_exp', String(Date.now() + tok.expires_in * 1000));
+      }
+    } finally {
+      history.replaceState(null, '', '/'); // URLからcodeを消す
+    }
+  }
+
+  const exp = Number(sessionStorage.getItem('token_exp') || 0);
+  if (idToken() && Date.now() < exp - 60000) {
+    showUser();
+    return true;
+  }
+  await redirectToLogin();
+  return false; // リダイレクト中
+}
+
+function logout() {
+  sessionStorage.removeItem('id_token');
+  sessionStorage.removeItem('token_exp');
+  const q = new URLSearchParams({
+    client_id: authCfg.client_id,
+    logout_uri: location.origin + '/',
+  });
+  location.href = `${authCfg.domain}/logout?${q}`;
+}
+
+document.getElementById('logoutBtn').addEventListener('click', logout);
 let responseActive = false; // AIの応答が進行中か(response.cancel の送信判断に使う)
 let personaChanging = false; // ペルソナ切替による意図的な再接続中か
 let searching = false; // Web検索の実行中か(完了までPTTをロックする)
@@ -222,7 +323,14 @@ function connect() {
   const persona = encodeURIComponent(personaSel.value || 'default');
   ws = new WebSocket(`${proto}://${location.host}/ws?persona=${persona}`);
 
-  ws.onopen = () => setStatus('サーバー接続OK。OpenAIへ接続中…');
+  ws.onopen = () => {
+    // 認証有効時は最初のメッセージでトークンを提示(サーバーが検証するまで
+    // 他のイベントは受け付けられない)
+    if (authCfg.enabled) {
+      ws.send(JSON.stringify({ type: 'proxy.auth', token: idToken() }));
+    }
+    setStatus('サーバー接続OK。OpenAIへ接続中…');
+  };
 
   ws.onmessage = (e) => {
     let ev;
@@ -242,6 +350,14 @@ function connect() {
         break;
       }
       case 'proxy.error':
+        if (ev.message?.includes('認証')) {
+          // トークン期限切れなど。破棄して再ログインへ
+          sessionStorage.removeItem('id_token');
+          sessionStorage.removeItem('token_exp');
+          setStatus('認証が切れました。ログイン画面へ移動します…', true);
+          redirectToLogin();
+          return;
+        }
         fatalError = true;
         setStatus(`${ev.message} (修正後にページを再読み込みしてください)`, true);
         pttBtn.disabled = true;
@@ -373,7 +489,7 @@ async function loadHistory() {
   const listEl = document.getElementById('historyList');
   listEl.textContent = '読み込み中…';
   try {
-    const res = await fetch('/api/history');
+    const res = await fetch('/api/history', { headers: authHeaders() });
     historySessions = await res.json();
   } catch (err) {
     listEl.textContent = `履歴の取得に失敗しました: ${err.message}`;
@@ -458,7 +574,7 @@ window.addEventListener('keyup', (e) => {
 // ---- ペルソナ ----
 async function initPersonas() {
   try {
-    const res = await fetch('/api/personas');
+    const res = await fetch('/api/personas', { headers: authHeaders() });
     const list = await res.json();
     personaSel.innerHTML = '';
     for (const p of list) {
@@ -487,4 +603,8 @@ personaSel.addEventListener('change', () => {
   }
 });
 
-initPersonas().then(connect);
+(async () => {
+  if (!(await initAuth())) return; // ログイン画面へリダイレクト中
+  await initPersonas();
+  connect();
+})();
