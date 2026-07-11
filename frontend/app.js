@@ -256,6 +256,7 @@ async function initMics() {
 }
 
 micSel.addEventListener('change', () => {
+  micSel.blur(); // フォーカスを外し、スペースキーをPTTに戻す
   if (micSel.value) localStorage.setItem('micId', micSel.value);
   else localStorage.removeItem('micId');
   // 次にボタンを押したとき、選択したマイクで録音チェーンを作り直す
@@ -556,14 +557,24 @@ document.getElementById('reloadHistory').addEventListener('click', loadHistory);
 pttBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); startTalking(); });
 pttBtn.addEventListener('pointerup', stopTalking);
 pttBtn.addEventListener('pointerleave', stopTalking);
+// セレクトやボタンにフォーカスがある間は、スペースはその部品の操作
+// (ドロップダウンを開く等)なのでPTTに使わない。ペルソナ切替の連打事故防止
+function isFormControlFocused() {
+  const tag = document.activeElement?.tagName;
+  return tag === 'SELECT' || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON';
+}
+
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'Space' && !e.repeat && document.activeElement !== pttBtn) {
+  if (e.code === 'Space' && !e.repeat && !isFormControlFocused()) {
     e.preventDefault();
     startTalking();
   }
 });
 window.addEventListener('keyup', (e) => {
-  if (e.code === 'Space') { e.preventDefault(); stopTalking(); }
+  if (e.code === 'Space' && !isFormControlFocused()) {
+    e.preventDefault();
+    stopTalking();
+  }
 });
 
 // ---- ペルソナ ----
@@ -586,6 +597,7 @@ async function initPersonas() {
 }
 
 personaSel.addEventListener('change', () => {
+  personaSel.blur(); // フォーカスを外し、スペースキーをPTTに戻す
   localStorage.setItem('persona', personaSel.value);
   const name = personaSel.selectedOptions[0]?.textContent || personaSel.value;
   appendTurn('⚙️').textContent = `ペルソナを「${name}」に切り替え(新しいセッションを開始)`;
