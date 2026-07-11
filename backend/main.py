@@ -30,7 +30,8 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jwt import PyJWKClient
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent  # backend/
+FRONTEND_DIR = BASE_DIR.parent / "frontend"
 load_dotenv(BASE_DIR / ".env")
 
 REALTIME_MODEL = os.getenv("REALTIME_MODEL", "gpt-realtime")
@@ -500,16 +501,17 @@ async def index(request: Request) -> FileResponse:
         try:
             await asyncio.to_thread(verify_token, token)
         except Exception:
-            return FileResponse(BASE_DIR / "static" / "login.html")
+            return FileResponse(FRONTEND_DIR / "login.html")
         if request.query_params:
             # 認証済みなのに ?code= 等が付いている(Cognitoセッションでの
             # 再ログインや履歴からの再訪)。認可コードをアドレスバーや
             # 履歴に残さないよう、クリーンなURLへリダイレクトする
             return RedirectResponse("/")
-    return FileResponse(BASE_DIR / "static" / "index.html")
+    return FileResponse(FRONTEND_DIR / "index.html")
 
 
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+# URLパスは /static のまま、配信元は frontend/ ディレクトリ
+app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 
 if __name__ == "__main__":

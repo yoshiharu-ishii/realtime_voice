@@ -26,12 +26,20 @@ APIキーはサーバー側の `.env` にのみ保持し、ブラウザには一
 - 入力マイクもリストボックスで切り替え可能(選択は保存され、抜き差しにも追従。
   選択中のマイクが使えない場合は既定のマイクへ自動フォールバック)
 
+## ディレクトリ構成
+
+```
+backend/    FastAPIサーバー(main.py)、personas/、pyproject.toml、.env
+frontend/   ブラウザ側一式(index.html, app.js, pcm-worklet.js, login.html)
+infra/      Terraform(Cognito認証基盤)
+```
+
 ## セットアップ
 
 [uv](https://docs.astral.sh/uv/) を使用(依存関係は pyproject.toml / uv.lock で管理)。
 
 ```bash
-cd realtime_voice
+cd realtime_voice/backend
 cp .env.example .env   # OPENAI_API_KEY を設定
 uv sync                # .venv 作成 + 依存インストール
 ```
@@ -39,6 +47,7 @@ uv sync                # .venv 作成 + 依存インストール
 ## 起動
 
 ```bash
+cd backend
 uv run uvicorn main:app --port 8000
 ```
 
