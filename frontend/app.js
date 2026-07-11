@@ -196,11 +196,7 @@ async function setupCapture() {
   const node = new AudioWorkletNode(ctx, 'pcm-capture');
   node.port.onmessage = (e) => {
     const f32 = e.data;
-    updateMeter(f32); // 録音・テスト中は常にレベルメーターを更新
-    if (testMode) { // マイクテスト中はAIに送らずローカルに溜める
-      testChunks.push(f32);
-      return;
-    }
+    updateMeter(f32); // 録音中は常にレベルインジケーターを更新
     if (!talking || !ws || ws.readyState !== WebSocket.OPEN) return;
     const i16 = new Int16Array(f32.length);
     for (let i = 0; i < f32.length; i++) {
@@ -222,77 +218,20 @@ async function setupCapture() {
   initMics();
 }
 
-// ---- マイクモニタ(レベルメーターとテスト録音) ----
-// 「AIに何が聞こえているか」を目と耳で確認するための診断機能。
-// 選択デバイスが使えず既定マイクへ暗黙にフォールバックした場合も、
-// ここに実際のデバイス名が表示されるので気づける
-let testMode = false;
-let testChunks = [];
+// ---- 入力レベルインジケーター(PTTボタン直上) ----
+// 録音中の音量をヒートマップ風に表示: 小さい=緑 → 大きい=黄→赤。
+// 喋っているのにバーが動かなければ、マイクが音を拾えていないと分かる
 const meterBar = document.getElementById('meterBar');
-const micTestBtn = document.getElementById('micTestBtn');
-const micTestInfo = document.getElementById('micTestInfo');
 
 function updateMeter(f32) {
   let sum = 0;
   for (let i = 0; i < f32.length; i++) sum += f32[i] * f32[i];
   const rms = Math.sqrt(sum / f32.length);
-  meterBar.style.width = `${Math.min(100, rms * 400).toFixed(0)}%`;
+  const level = Math.min(1, rms * 4); // 0〜1に正規化(体感に合わせたスケール)
+  const hue = 120 * (1 - level); // 120=緑 → 0=赤
+  meterBar.style.width = `${(level * 100).toFixed(0)}%`;
+  meterBar.style.backgroundColor = `hsl(${hue.toFixed(0)}, 75%, 45%)`;
 }
-
-function currentMicLabel() {
-  return captureStream?.getAudioTracks()[0]?.label || '不明なデバイス';
-}
-
-async function micTest() {
-  if (testMode) return;
-  micTestBtn.disabled = true;
-  try {
-    if (!captureReady) await setupCapture();
-  } catch (err) {
-    micTestInfo.textContent = `マイクを使用できません: ${err.message}`;
-    micTestBtn.disabled = false;
-    return;
-  }
-  const label = currentMicLabel();
-  micTestInfo.textContent = `🔴 録音中…(3秒) 実際の入力: ${label}`;
-  testChunks = [];
-  testMode = true;
-  await new Promise((r) => setTimeout(r, 3000));
-  testMode = false;
-
-  const total = testChunks.reduce((s, a) => s + a.length, 0);
-  if (!total) {
-    micTestInfo.textContent =
-      `⚠️ 音声フレームが1つも届いていません (${label})。マイクを切り替えて再テストしてください`;
-    micTestBtn.disabled = false;
-    return;
-  }
-  const buf = playCtx.createBuffer(1, total, 24000);
-  const ch = buf.getChannelData(0);
-  let offset = 0;
-  for (const a of testChunks) { ch.set(a, offset); offset += a.length; }
-  let peak = 0;
-  for (let i = 0; i < ch.length; i++) peak = Math.max(peak, Math.abs(ch[i]));
-  const peakPct = Math.round(peak * 100);
-
-  if (playCtx.state === 'suspended') await playCtx.resume();
-  const src = playCtx.createBufferSource();
-  src.buffer = buf;
-  src.connect(playCtx.destination);
-  micTestInfo.textContent = `▶️ 再生中: これがAIに聞こえている音です (${label} / ピーク ${peakPct}%)`;
-  src.start();
-  src.onended = () => {
-    const warn = peak < 0.05
-      ? ' ⚠️ 音が小さすぎます。マイクとの距離や選択デバイスを確認してください'
-      : '';
-    micTestInfo.textContent = `テスト完了 (${label} / ピーク ${peakPct}%)${warn}`;
-    meterBar.style.width = '0%';
-    micTestBtn.disabled = false;
-    testChunks = [];
-  };
-}
-
-micTestBtn.addEventListener('click', micTest);
 
 // ---- マイク選択 ----
 async function initMics() {
