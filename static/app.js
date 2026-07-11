@@ -579,6 +579,9 @@ personaSel.addEventListener('change', () => {
 });
 
 (async () => {
+  // 認可コード等のクエリが残っていたらアドレスバーと履歴から消す(保険。
+  // 通常はサーバー側のリダイレクトで浄化される)
+  if (location.search) history.replaceState(null, '', location.pathname);
   if (!(await initAuth())) return; // ログイン画面へリダイレクト中
   await initPersonas();
   connect();

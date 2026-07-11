@@ -26,7 +26,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jwt import PyJWKClient
 
@@ -486,6 +486,11 @@ async def index(request: Request) -> FileResponse:
             await asyncio.to_thread(verify_token, token)
         except Exception:
             return FileResponse(BASE_DIR / "static" / "login.html")
+        if request.query_params:
+            # 認証済みなのに ?code= 等が付いている(Cognitoセッションでの
+            # 再ログインや履歴からの再訪)。認可コードをアドレスバーや
+            # 履歴に残さないよう、クリーンなURLへリダイレクトする
+            return RedirectResponse("/")
     return FileResponse(BASE_DIR / "static" / "index.html")
 
 
