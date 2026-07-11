@@ -164,6 +164,9 @@ async function setupCapture() {
     echoCancellation: true,
     noiseSuppression: true,
     autoGainControl: true,
+    // 対応ブラウザでは話者の声以外(BGM・環境音)の分離を要求する。
+    // 非対応環境では単に無視される(エラーにはならない)
+    voiceIsolation: true,
   };
   if (micSel.value) constraints.deviceId = { exact: micSel.value };
   let stream;
