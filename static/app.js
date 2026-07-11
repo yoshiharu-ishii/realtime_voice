@@ -124,6 +124,11 @@ function connect() {
         setStatus(`接続完了 (model: ${ev.model})`);
         pttBtn.disabled = false;
         break;
+      case 'proxy.search': {
+        setStatus(`🔍 Web検索中: ${ev.query}`);
+        appendTurn('🔍 検索').textContent = ev.query;
+        break;
+      }
       case 'proxy.error':
         fatalError = true;
         setStatus(`${ev.message} (修正後にページを再読み込みしてください)`, true);
@@ -264,7 +269,7 @@ async function loadHistory() {
       div.className = 'turn';
       const who = document.createElement('span');
       who.className = 'who';
-      who.textContent = m.role === 'user' ? 'あなた' : 'AI';
+      who.textContent = { user: 'あなた', assistant: 'AI', search: '🔍 検索' }[m.role] || m.role;
       const text = document.createElement('span');
       text.textContent = ' ' + m.text;
       div.append(who, text);

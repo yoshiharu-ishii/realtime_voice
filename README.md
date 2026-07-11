@@ -17,6 +17,9 @@ APIキーはサーバー側の `.env` にのみ保持し、ブラウザには一
 - 離した時: `input_audio_buffer.commit` + `response.create`
 - 応答中に押すと `response.cancel` + 再生停止で割り込み(バージイン)
 - サーバーVAD(`turn_detection`)は無効化し、PTTで発話区間を制御
+- 会話の文字起こしは SQLite(`chat_history.db`)に自動保存され「履歴」タブで見返せる
+- モデルが最新情報を必要と判断すると `web_search` ツールを呼び出し、
+  サーバーが OpenAI Responses API の Web 検索で調べて結果を返す(ハルシネーション対策)
 
 ## セットアップ
 
