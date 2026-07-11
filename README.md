@@ -45,4 +45,21 @@ uv run uvicorn main:app --port 8000
 ブラウザで http://localhost:8000 を開き、ボタン(またはスペースキー)を
 押している間だけ話す。マイク許可が必要。
 
+## 認証(任意)
+
+`.env` に `COGNITO_*` を設定すると Amazon Cognito 認証が有効になる
+(未設定なら認証なしで動作)。ログインは Hosted UI への
+リダイレクト(認可コード + PKCE)で、バックエンドは HTTP API と
+WebSocket の両方で IDトークンを検証する。WebSocket は接続後の
+最初のメッセージ `proxy.auth {token}` で認証し、トークンをURLに
+載せない(アクセスログ対策)。ユーザー作成は管理者のみ
+(セルフサインアップ無効):
+
+```bash
+aws cognito-idp admin-create-user --user-pool-id <POOL_ID> \
+  --username <メールアドレス> --message-action SUPPRESS
+aws cognito-idp admin-set-user-password --user-pool-id <POOL_ID> \
+  --username <メールアドレス> --password '<パスワード>' --permanent
+```
+
 ※ getUserMedia の制約上、localhost 以外で使う場合は HTTPS が必要。
