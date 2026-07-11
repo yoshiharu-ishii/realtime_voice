@@ -75,6 +75,11 @@ async function initAuth() {
 function logout() {
   clearToken();
   sessionStorage.removeItem('pkce_verifier');
+  // 門番ページが「ログアウトしました」と出せるようにフラグを残す
+  sessionStorage.setItem('logging_out', '1');
+  setStatus('ログアウトしています…');
+  pttBtn.disabled = true;
+  document.getElementById('logoutBtn').disabled = true;
   const q = new URLSearchParams({
     client_id: authCfg.client_id,
     logout_uri: location.origin + '/',
@@ -574,7 +579,14 @@ personaSel.addEventListener('change', () => {
 });
 
 (async () => {
+  // 認可コード等のクエリが残っていたらアドレスバーと履歴から消す(保険。
+  // 通常はサーバー側のリダイレクトで浄化される)
+  if (location.search) history.replaceState(null, '', location.pathname);
   if (!(await initAuth())) return; // ログイン画面へリダイレクト中
+  // アプリが正常起動した = ログインが成立した時だけ、門番ページの
+  // ループガード用カウンタをリセットする
+  sessionStorage.removeItem('auth_redirects');
+  sessionStorage.removeItem('login_failures');
   await initPersonas();
   connect();
 })();

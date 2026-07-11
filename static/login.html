@@ -18,12 +18,22 @@
   </style>
 </head>
 <body>
-  <p id="msg">ログイン画面へ移動しています…</p>
+  <p id="msg">お待ちください…</p>
   <script>
     // 未認証時にサーバーが返す門番ページ。アプリ本体のUIは一切含まない。
     // 役割: (1) Cognitoへのリダイレクト(PKCE) (2) コールバック(?code=)のトークン交換
     (async () => {
       const msg = document.getElementById('msg');
+      // 状態に応じてメッセージを出し分ける
+      // (ログイン処理中 / ログアウト直後 / これからログイン画面へ、は全部別物)
+      const isCallback = new URLSearchParams(location.search).has('code');
+      const loggingOut = sessionStorage.getItem('logging_out') === '1';
+      sessionStorage.removeItem('logging_out');
+      msg.textContent = isCallback
+        ? 'ログインしています…'
+        : loggingOut
+          ? 'ログアウトしました。ログイン画面へ移動しています…'
+          : 'ログイン画面へ移動しています…';
       const b64url = (bytes) => btoa(String.fromCharCode(...bytes))
         .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
@@ -56,11 +66,42 @@
             const tok = await res.json();
             document.cookie =
               `id_token=${tok.id_token}; Max-Age=${tok.expires_in}; Path=/; SameSite=Lax`;
+            // Cookieが実際に保存できたか確認(ブロックされているとここで
+            // 検知しない限り、ログイン画面との無限ループになる)
+            if (!document.cookie.includes('id_token=')) {
+              msg.textContent =
+                'Cookieを保存できないためログインできません。ブラウザのCookie設定を確認してください。';
+              return;
+            }
             location.replace('/');
             return;
           }
-        } catch (_) { /* 失敗時は下のログインリダイレクトへ */ }
-        msg.textContent = 'ログインに失敗しました。やり直します…';
+          console.error('token exchange failed:', res.status, await res.text());
+        } catch (err) {
+          console.error('token exchange error:', err);
+        }
+        // 交換失敗: 表示と挙動を一致させ、連続失敗時は無限ループさせず停止する
+        const failures = Number(sessionStorage.getItem('login_failures') || 0) + 1;
+        sessionStorage.setItem('login_failures', String(failures));
+        if (failures >= 2) {
+          msg.textContent =
+            'ログインに失敗しました。ページを再読み込みして、やり直してください。';
+          return;
+        }
+        msg.textContent = 'ログインに失敗しました。ログイン画面へ移動します…';
+        await new Promise((r) => setTimeout(r, 1500)); // メッセージを読める時間を確保
+      }
+
+      // ループガード: ログイン画面への往復回数を数える(アプリが正常に
+      // 起動したときだけ app.js がリセットする)。交換の成否に関係なく
+      // 数えるので、「交換は成功するがCookieが効かない」型のループも止まる
+      const redirects = Number(sessionStorage.getItem('auth_redirects') || 0) + 1;
+      sessionStorage.setItem('auth_redirects', String(redirects));
+      if (redirects >= 4) {
+        msg.textContent =
+          'ログイン画面への移動を繰り返しているため中断しました。'
+          + 'ブラウザのCookie設定やサーバーのCognito設定を確認し、ページを再読み込みしてください。';
+        return;
       }
 
       // PKCEを準備してCognitoのログイン画面へ

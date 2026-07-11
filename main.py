@@ -26,7 +26,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jwt import PyJWKClient
 
@@ -102,6 +102,21 @@ ALLOWED_CLIENT_EVENTS = {
 }
 
 app = FastAPI()
+
+
+@app.middleware("http")
+async def cache_control(request: Request, call_next):
+    """キャッシュ制御。/ は認証状態でアプリと門番ページを出し分けるため、
+    キャッシュされると「ログアウト時代の門番ページ」が使い回されて
+    ログイン画面との無限ループになる。絶対にキャッシュさせない。"""
+    response = await call_next(request)
+    if request.url.path == "/":
+        response.headers["Cache-Control"] = "no-store"
+    elif request.url.path.startswith("/static"):
+        # 静的ファイルは毎回サーバーへ再検証(304なら転送なし)。
+        # 更新した app.js が古いまま動く事故を防ぐ
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 # ---- Cognito認証 ----
 # COGNITO_* が設定されていなければ認証なしで動作する(ローカル開発用)
@@ -486,6 +501,11 @@ async def index(request: Request) -> FileResponse:
             await asyncio.to_thread(verify_token, token)
         except Exception:
             return FileResponse(BASE_DIR / "static" / "login.html")
+        if request.query_params:
+            # 認証済みなのに ?code= 等が付いている(Cognitoセッションでの
+            # 再ログインや履歴からの再訪)。認可コードをアドレスバーや
+            # 履歴に残さないよう、クリーンなURLへリダイレクトする
+            return RedirectResponse("/")
     return FileResponse(BASE_DIR / "static" / "index.html")
 
 
