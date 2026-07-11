@@ -27,6 +27,12 @@
       box-sizing: border-box;
     }
     h1 { font-size: 1.2rem; margin: 0; }
+    #topbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
     #tabs { display: flex; gap: 8px; }
     .tab {
       flex: 1;
@@ -139,7 +145,11 @@
   </style>
 </head>
 <body>
-  <h1>🎙️ Push-to-Talk リアルタイム通話</h1>
+  <header id="topbar">
+    <h1>🎙️ Push-to-Talk リアルタイム通話</h1>
+    <span id="userInfo" hidden></span>
+    <button id="logoutBtn" hidden>ログアウト</button>
+  </header>
   <div id="tabs">
     <button class="tab active" data-tab="call">🎙️ 通話</button>
     <button class="tab" data-tab="history">📜 履歴</button>
@@ -151,8 +161,6 @@
       <select id="persona"></select>
       <label for="mic">🎤:</label>
       <select id="mic"><option value="">既定のマイク</option></select>
-      <span id="userInfo" hidden></span>
-      <button id="logoutBtn" hidden>ログアウト</button>
     </div>
     <div id="status">接続中…</div>
     <div id="transcript"></div>
