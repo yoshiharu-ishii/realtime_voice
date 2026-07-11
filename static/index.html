@@ -108,8 +108,12 @@
       background: transparent;
       color: inherit;
     }
-    #reloadHistory {
-      align-self: flex-end;
+    #hist-controls {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    #histFilter, #reloadHistory {
       padding: 6px 14px;
       font-size: 0.85rem;
       border: 1px solid var(--border);
@@ -141,7 +145,10 @@
   </div>
 
   <div id="view-history" hidden>
-    <button id="reloadHistory">🔄 更新</button>
+    <div id="hist-controls">
+      <select id="histFilter"><option value="">すべてのペルソナ</option></select>
+      <button id="reloadHistory">🔄 更新</button>
+    </div>
     <div id="historyList"></div>
   </div>
 

@@ -12,7 +12,25 @@ let talking = false;
 let fatalError = false; // APIキー未設定など、再接続しても直らないエラー
 let responseActive = false; // AIの応答が進行中か(response.cancel の送信判断に使う)
 let personaChanging = false; // ペルソナ切替による意図的な再接続中か
+let searching = false; // Web検索の実行中か(完了までPTTをロックする)
+let searchUnlockTimer = null;
 const personaSel = document.getElementById('persona');
+
+const PTT_LABEL = '押している間だけ話す(またはスペースキー長押し)';
+
+function setSearchLock(on) {
+  searching = on;
+  pttBtn.disabled = on || !ws || ws.readyState !== WebSocket.OPEN;
+  if (on) {
+    pttBtn.textContent = '🔍 検索中…(終わるまで待ってね)';
+    // 万一完了イベントを取りこぼしても永久ロックにならないよう保険
+    clearTimeout(searchUnlockTimer);
+    searchUnlockTimer = setTimeout(() => setSearchLock(false), 90000);
+  } else {
+    clearTimeout(searchUnlockTimer);
+    if (!talking) pttBtn.textContent = PTT_LABEL;
+  }
+}
 let sentSamples = 0; // commit には最低 100ms(2400サンプル)必要
 
 // ---- 再生側 ----
@@ -192,11 +210,13 @@ function connect() {
   currentAiTurn = null;
   currentUserTurn = null;
   responseActive = false;
+  searching = false; // 検索ロックも解除(旧セッションの検索結果は届かない)
+  clearTimeout(searchUnlockTimer);
   if (talking) { // マイク押下中に切り替わった場合は録音状態も解除
     talking = false;
     pttBtn.classList.remove('talking');
-    pttBtn.textContent = '押している間だけ話す(またはスペースキー長押し)';
   }
+  pttBtn.textContent = PTT_LABEL;
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const persona = encodeURIComponent(personaSel.value || 'default');
@@ -216,6 +236,9 @@ function connect() {
       case 'proxy.search': {
         setStatus(`🔍 Web検索中: ${ev.query}`);
         appendTurn('🔍 検索').textContent = ev.query;
+        // 検索が終わって応答が再開するまで発話をロック
+        // (検索中に話すと、検索結果と新しい発話への応答が混線するため)
+        setSearchLock(true);
         break;
       }
       case 'proxy.error':
@@ -266,13 +289,16 @@ function connect() {
       case 'response.done':
         responseActive = false;
         currentAiTurn = null;
-        setStatus('待機中(ボタンを押して話してください)');
+        // 検索を伴わない応答完了なら通常待機へ(検索トリガーの応答完了時は
+        // 直後に proxy.search が来てロックされる)
+        if (!searching) setStatus('待機中(ボタンを押して話してください)');
         break;
       case 'response.created':
         responseActive = true;
         // 応答ごとに表示ターンを分ける(連続する応答の文字起こしが
         // 同じ行に連結されるのを防ぐ)
         currentAiTurn = null;
+        if (searching) setSearchLock(false); // 検索完了→応答再開でロック解除
         setStatus('AIが応答中…');
         break;
     }
@@ -325,7 +351,7 @@ function stopTalking() {
   if (!talking) return;
   talking = false;
   pttBtn.classList.remove('talking');
-  pttBtn.textContent = '押している間だけ話す(またはスペースキー長押し)';
+  pttBtn.textContent = PTT_LABEL;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   if (sentSamples < 2400) { // 100ms 未満は commit がエラーになるため破棄
     ws.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
@@ -341,27 +367,52 @@ function stopTalking() {
 }
 
 // ---- タブ切り替えと履歴表示 ----
+let historySessions = [];
+
 async function loadHistory() {
   const listEl = document.getElementById('historyList');
   listEl.textContent = '読み込み中…';
-  let sessions;
   try {
     const res = await fetch('/api/history');
-    sessions = await res.json();
+    historySessions = await res.json();
   } catch (err) {
     listEl.textContent = `履歴の取得に失敗しました: ${err.message}`;
     return;
   }
+  // ペルソナフィルタの選択肢を更新(選択中の値は維持)
+  const filter = document.getElementById('histFilter');
+  const current = filter.value;
+  const names = [...new Set(historySessions.map((s) => s.persona).filter(Boolean))];
+  filter.innerHTML = '<option value="">すべてのペルソナ</option>';
+  for (const n of names) {
+    const opt = document.createElement('option');
+    opt.value = n;
+    opt.textContent = n;
+    filter.appendChild(opt);
+  }
+  if (names.includes(current)) filter.value = current;
+  renderHistory();
+}
+
+function renderHistory() {
+  const listEl = document.getElementById('historyList');
+  const filter = document.getElementById('histFilter').value;
+  const sessions = filter
+    ? historySessions.filter((s) => s.persona === filter)
+    : historySessions;
   listEl.innerHTML = '';
   if (!sessions.length) {
-    listEl.textContent = 'まだ履歴がありません。通話するとここに保存されます。';
+    listEl.textContent = filter
+      ? 'このペルソナの履歴はまだありません。'
+      : 'まだ履歴がありません。通話するとここに保存されます。';
     return;
   }
   for (const s of sessions) {
     const sec = document.createElement('section');
     sec.className = 'hist-session';
     const h = document.createElement('h3');
-    h.textContent = `${s.started_at.replace('T', ' ')} — ${s.messages.length}件`;
+    const persona = s.persona || 'ペルソナ記録なし';
+    h.textContent = `${s.started_at.replace('T', ' ')} — ${persona} — ${s.messages.length}件`;
     sec.appendChild(h);
     for (const m of s.messages) {
       const div = document.createElement('div');
@@ -377,6 +428,8 @@ async function loadHistory() {
     listEl.appendChild(sec);
   }
 }
+
+document.getElementById('histFilter').addEventListener('change', renderHistory);
 
 document.querySelectorAll('.tab').forEach((btn) => {
   btn.addEventListener('click', () => {
