@@ -1,0 +1,12 @@
+[project]
+name = "realtime-voice"
+version = "0.1.0"
+description = "Push-to-Talk リアルタイム音声通話 (ブラウザ + FastAPI + OpenAI Realtime API)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "websockets>=13",
+    "python-dotenv>=1.0",
+]

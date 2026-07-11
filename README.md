@@ -20,17 +20,18 @@ APIキーはサーバー側の `.env` にのみ保持し、ブラウザには一
 
 ## セットアップ
 
+[uv](https://docs.astral.sh/uv/) を使用(依存関係は pyproject.toml / uv.lock で管理)。
+
 ```bash
 cd realtime_voice
 cp .env.example .env   # OPENAI_API_KEY を設定
-python3 -m venv .venv
-./.venv/bin/pip install -r requirements.txt
+uv sync                # .venv 作成 + 依存インストール
 ```
 
 ## 起動
 
 ```bash
-./.venv/bin/uvicorn main:app --port 8000
+uv run uvicorn main:app --port 8000
 ```
 
 ブラウザで http://localhost:8000 を開き、ボタン(またはスペースキー)を
