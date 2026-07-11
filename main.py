@@ -108,18 +108,23 @@ def init_db() -> None:
                 created_at TEXT NOT NULL
             )"""
         )
+        # 既存DBへの persona 列の後付けマイグレーション
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(messages)")]
+        if "persona" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN persona TEXT NOT NULL DEFAULT ''")
 
 
 init_db()
 
 
-def save_message(session_id: str, role: str, text: str) -> None:
+def save_message(session_id: str, role: str, text: str, persona: str = "") -> None:
     if not text.strip():
         return
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
-            "INSERT INTO messages (session_id, role, text, created_at) VALUES (?, ?, ?, ?)",
-            (session_id, role, text, datetime.now().isoformat(timespec="seconds")),
+            "INSERT INTO messages (session_id, role, text, created_at, persona)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (session_id, role, text, datetime.now().isoformat(timespec="seconds"), persona),
         )
 
 
@@ -139,7 +144,7 @@ def history(limit: int = 30) -> list:
         out = []
         for sid in session_ids:
             rows = conn.execute(
-                "SELECT role, text, created_at FROM messages"
+                "SELECT role, text, created_at, persona FROM messages"
                 " WHERE session_id = ? ORDER BY id",
                 (sid,),
             ).fetchall()
@@ -147,7 +152,11 @@ def history(limit: int = 30) -> list:
                 {
                     "session_id": sid,
                     "started_at": rows[0]["created_at"],
-                    "messages": [dict(r) for r in rows],
+                    "persona": rows[0]["persona"],
+                    "messages": [
+                        {"role": r["role"], "text": r["text"], "created_at": r["created_at"]}
+                        for r in rows
+                    ],
                 }
             )
     return out
@@ -302,7 +311,7 @@ async def relay(browser_ws: WebSocket) -> None:
                 except json.JSONDecodeError:
                     query = ""
                 await browser_ws.send_json({"type": "proxy.search", "query": query})
-                save_message(session_id, "search", query)
+                save_message(session_id, "search", query, persona["name"])
                 try:
                     result = await run_web_search(api_key, query)
                 except Exception as exc:
@@ -336,12 +345,16 @@ async def relay(browser_ws: WebSocket) -> None:
                         ev = json.loads(raw)
                         etype = ev.get("type", "")
                         if etype == "conversation.item.input_audio_transcription.completed":
-                            save_message(session_id, "user", ev.get("transcript", ""))
+                            save_message(
+                                session_id, "user", ev.get("transcript", ""), persona["name"]
+                            )
                         elif etype in (
                             "response.output_audio_transcript.done",
                             "response.audio_transcript.done",
                         ):
-                            save_message(session_id, "assistant", ev.get("transcript", ""))
+                            save_message(
+                                session_id, "assistant", ev.get("transcript", ""), persona["name"]
+                            )
                         elif etype == "response.done":
                             await browser_ws.send_text(raw)
                             await handle_function_calls(ev)
