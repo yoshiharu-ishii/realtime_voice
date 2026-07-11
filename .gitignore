@@ -2,3 +2,9 @@
 .venv/
 __pycache__/
 chat_history.db
+
+# Terraform
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/crash.log

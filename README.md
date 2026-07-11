@@ -65,4 +65,21 @@ aws cognito-idp admin-set-user-password --user-pool-id <POOL_ID> \
   --username <メールアドレス> --password '<パスワード>' --permanent
 ```
 
+## インフラ (Terraform)
+
+Cognito 一式(User Pool / アプリクライアント / Hosted UIドメイン)は
+`infra/` の Terraform で管理している。
+
+```bash
+cd infra
+terraform init
+terraform plan    # 差分確認
+terraform apply
+terraform output cognito_env   # .env に貼る値が出力される
+```
+
+新しい環境に作る場合は `variables.tf` の `domain_prefix`(グローバルで
+一意)を変えて apply し、`imports.tf` は削除する。state はローカル管理
+(gitignore済み)。
+
 ※ getUserMedia の制約上、localhost 以外で使う場合は HTTPS が必要。
