@@ -3,6 +3,8 @@
 Push-to-Talkのリアルタイム音声通話アプリ。ブラウザ ⇄ FastAPI(WebSocket中継) ⇄ OpenAI Realtime API。
 2026-07-11に1日で構築。開発記: https://pocraft.net/?p=122
 
+**仕組みの図解: `docs/architecture.md`(Mermaid)。ユーザーはコードを読まず図で把握するスタイルなので、実装を変えるPRでは必ず該当する図も更新すること。**
+
 ## 構成
 
 - `backend/` — FastAPI (main.py)、ペルソナ定義(personas/*.md)、uv管理(pyproject.toml)。`.env` と `chat_history.db` もここ(gitignore済み)
