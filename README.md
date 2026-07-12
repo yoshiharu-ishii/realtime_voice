@@ -5,12 +5,22 @@ APIキーはサーバー側の `.env` にのみ保持し、ブラウザには一
 
 ## 構成
 
-```
-ブラウザ                    FastAPI (main.py)              OpenAI
-─────────                  ─────────────────              ──────
-マイク → AudioWorklet       /ws で中継                     Realtime API
-  24kHz PCM16 化      ──→  許可イベントのみ転送      ──→   (gpt-realtime)
-スピーカー ← Web Audio ←──  サーバーイベントを転送    ←──   音声delta
+```mermaid
+flowchart LR
+    subgraph B["ブラウザ (frontend/)"]
+        MIC["🎤 マイク<br/>AudioWorkletで24kHz PCM16化"]
+        SPK["🔊 スピーカー<br/>Web Audioで順次再生"]
+    end
+    subgraph R["FastAPI 中継サーバー (backend/)"]
+        WS["/ws<br/>許可イベントのみ転送<br/>APIキー・履歴・検索ツールはここ"]
+    end
+    subgraph O["OpenAI"]
+        RT["Realtime API<br/>(gpt-realtime)"]
+    end
+    MIC -- "音声 (base64 PCM16)" --> WS
+    WS -- "転送" --> RT
+    RT -- "音声delta / 文字起こし" --> WS
+    WS -- "転送" --> SPK
 ```
 
 - 押している間: `input_audio_buffer.append`(base64 PCM16 24kHz)を送信
