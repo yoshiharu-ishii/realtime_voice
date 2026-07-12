@@ -94,15 +94,18 @@ sequenceDiagram
 sequenceDiagram
     participant B as ブラウザ
     participant R as 中継サーバー
-    participant O as OpenAI Realtime
-    participant S as Responses API (Web検索)
+    box rgb(230, 240, 255) OpenAI
+    participant O as Realtime API<br/>(音声。自分では検索できない)
+    participant S as Responses API<br/>(ホスト型Web検索を持つ)
+    end
 
     Note over O: セッション開始時に「求人票」を渡してある<br/>tools: [web_search], tool_choice: auto
     B->>R: (音声)「ミジオロウスキーについて教えて」
     R->>O: (転送)
     O-->>R: response.done の中に function_call<br/>{name: web_search, arguments: {query}, call_id}
     R-->>B: proxy.search(🔍表示・PTTロック)
-    R->>S: 検索を実行(ここは普通のPython)
+    R->>S: 検索APIへ橋渡し(HTTPを1本投げるだけ)
+    Note over S: 実際のWeb検索と要約は<br/>OpenAI側のインフラが行う
     S-->>R: 検索結果テキスト
     R->>O: conversation.item.create<br/>function_call_output {call_id, 結果}
     R->>O: response.create(続きをどうぞ)
@@ -110,7 +113,7 @@ sequenceDiagram
     R-->>B: (転送・再生・PTTロック解除)
 ```
 
-`call_id` が「どの依頼への答えか」を紐付ける伝票番号。`web_search` の中身を差し替えれば、社内DB検索でもメール送信でも同じ仕組みで動く。
+`call_id` が「どの依頼への答えか」を紐付ける伝票番号。中継サーバーは検索エンジンを持っておらず、「検索できない音声モデル」と「検索できるテキストAPI」の橋渡しをしているだけ。`web_search` の中身(橋渡し先)を差し替えれば、社内DB検索でもメール送信でも同じ仕組みで動く。
 
 ## 5. 認証(Cognito + 門番ページ)
 
