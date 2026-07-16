@@ -52,6 +52,10 @@ def build_session_config(persona: dict, mode: str = "ptt") -> dict:
         "audio": {
             "input": {
                 "format": {"type": "audio/pcm", "rate": 24000},
+                # OpenAI側のノイズリダクション。VADと文字起こしの手前で入力を掃除し、
+                # 衝撃音(机を叩く・マイク接触など)を発話と誤検知するのを抑える。
+                # near_field は口元マイク(ヘッドセット・ノートPC)向けのプロファイル
+                "noise_reduction": {"type": "near_field"},
                 "turn_detection": turn_detection,
                 "transcription": {"model": TRANSCRIBE_MODEL, "language": "ja"},
             },
