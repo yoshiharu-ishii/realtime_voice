@@ -7,7 +7,8 @@ Push-to-Talkのリアルタイム音声通話アプリ。ブラウザ ⇄ FastAP
 
 ## 構成
 
-- `backend/` — FastAPI。モジュール分割済み: `main.py`(組み立て+ルーティングのみ) / `config.py`(環境変数) / `auth.py`(Cognito) / `relay.py`(WebSocket中継の本体) / `personas.py` / `history.py`(SQLite) / `search.py`(web_searchツール)。ペルソナ定義(personas/*.md)、uv管理(pyproject.toml)、`.env` と `chat_history.db` もここ(gitignore済み)
+- `backend/` — FastAPI。モジュール分割済み: `main.py`(組み立て+ルーティングのみ) / `config.py`(環境変数) / `auth.py`(Cognito) / `relay.py`(WebSocket中継の本体) / `webrtc.py`(WebRTC用一時キー発行) / `personas.py` / `history.py`(SQLite) / `search.py`(web_searchツール)。ペルソナ定義(personas/*.md)、uv管理(pyproject.toml)、`.env` と `chat_history.db` もここ(gitignore済み)
+- 回線は2方式: WebSocket中継(`relay.py`+`app.js`)とWebRTC直結(`webrtc.py`+`frontend/webrtc.js`)。UIの「回線」で切替。WebRTCではfunction callingと履歴保存を**ブラウザ側**が `/api/search` `/api/history/log` 経由で行う(docs/architecture.md §7)
 - `frontend/` — index.html / app.js / pcm-worklet.js / login.html。URLパスは `/static/...` のまま配信元だけこのディレクトリ
 - `infra/` — Terraform(Cognito一式)。stateはローカル(gitignore済み)
 
@@ -17,7 +18,7 @@ Push-to-Talkのリアルタイム音声通話アプリ。ブラウザ ⇄ FastAP
 - **ポート8000はユーザーが自分のターミナルで起動する。Claudeの検証は8001を使い、終わったら必ず止める**
 - 検証は必ずエンドツーエンドで: 合成音声は `say -v Kyoko -o x.aiff "…" && afconvert -f WAVE -d LEI16@24000 -c 1 x.aiff x.wav`、WebSocketテストクライアントで append→commit→response.create を流す
 - 認証付きの検証: `aws cognito-idp admin-initiate-auth --auth-flow ADMIN_USER_PASSWORD_AUTH` でIDトークンを発行し、HTTPは `Authorization: Bearer`、ブラウザは `id_token` Cookieに注入。テストユーザーのパスワードが不明なら `admin-set-user-password --permanent` で再設定
-- ブラウザペインはマイク権限がないため、実マイクの録音テストはユーザーに依頼する
+- ブラウザペインはマイク権限がないため、実マイクの録音テストはユーザーに依頼する。ただし**getUserMediaを差し替えれば偽マイクでE2E可能**: `AudioContext`+`createMediaStreamDestination()` のstreamを返すよう`navigator.mediaDevices.getUserMedia`を上書きし、sayで作ったWAVを`AudioBufferSourceNode`でdestへ再生するとWebRTC経由でも文字起こしまで検証できる(テスト用WAVは一時的にfrontend/へ置いて配信し、終わったら削除)
 - プレビューランチャー(launch.json)はサンドボックスがvenvを読めず使えない。Bashバックグラウンド起動+ブラウザで確認
 
 ## アーキテクチャの要点(ハマりどころ)

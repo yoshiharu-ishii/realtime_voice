@@ -28,29 +28,34 @@ from personas import load_persona
 from search import WEB_SEARCH_TOOL, run_web_search
 
 
-def session_update_event(persona: dict) -> dict:
-    """Push-to-Talk 用のセッション設定(サーバーVADは無効化し、手動commitで区切る)。"""
+def build_session_config(persona: dict) -> dict:
+    """Push-to-Talk 用のセッション設定(サーバーVADは無効化し、手動commitで区切る)。
+
+    WebSocket中継では session.update に包んで送り、WebRTC直結では
+    一時キー(client_secrets)発行時に埋め込む。両モードで共通。
+    """
     return {
-        "type": "session.update",
-        "session": {
-            "type": "realtime",
-            "output_modalities": ["audio"],
-            "instructions": persona["instructions"],
-            "tools": [WEB_SEARCH_TOOL],
-            "tool_choice": "auto",
-            "audio": {
-                "input": {
-                    "format": {"type": "audio/pcm", "rate": 24000},
-                    "turn_detection": None,
-                    "transcription": {"model": TRANSCRIBE_MODEL, "language": "ja"},
-                },
-                "output": {
-                    "format": {"type": "audio/pcm", "rate": 24000},
-                    "voice": persona["voice"],
-                },
+        "type": "realtime",
+        "output_modalities": ["audio"],
+        "instructions": persona["instructions"],
+        "tools": [WEB_SEARCH_TOOL],
+        "tool_choice": "auto",
+        "audio": {
+            "input": {
+                "format": {"type": "audio/pcm", "rate": 24000},
+                "turn_detection": None,
+                "transcription": {"model": TRANSCRIBE_MODEL, "language": "ja"},
+            },
+            "output": {
+                "format": {"type": "audio/pcm", "rate": 24000},
+                "voice": persona["voice"],
             },
         },
     }
+
+
+def session_update_event(persona: dict) -> dict:
+    return {"type": "session.update", "session": build_session_config(persona)}
 
 
 async def relay(browser_ws: WebSocket) -> None:
