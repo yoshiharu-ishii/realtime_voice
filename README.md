@@ -1,32 +1,30 @@
-# Push-to-Talk リアルタイム音声通話
+# リアルタイム音声通話 (Push-to-Talk / ハンズフリー)
 
-ブラウザ(Push-to-Talk) ↔ FastAPI(WebSocket中継) ↔ OpenAI Realtime API の構成。
-APIキーはサーバー側の `.env` にのみ保持し、ブラウザには一切渡らない。
+ブラウザ ⇄ OpenAI Realtime API のリアルタイム音声通話アプリ。
+**回線**は WebRTC(直結・既定) と WebSocket(FastAPI中継) の2方式、
+**会話モード**は Push-to-Talk と ハンズフリー通話(VAD) の2方式を、UIで自由に組み合わせられる。
+APIキーはサーバー側の `.env` にのみ保持し、ブラウザには一切渡らない
+(WebRTC回線でも、ブラウザに渡るのは数分で失効する一時キーのみ)。
 
 ## 構成
 
 ```mermaid
 flowchart LR
-    subgraph B["ブラウザ (frontend/)"]
-        MIC["🎤 マイク<br/>AudioWorkletで24kHz PCM16化"]
-        SPK["🔊 スピーカー<br/>Web Audioで順次再生"]
-    end
-    subgraph R["FastAPI 中継サーバー (backend/)"]
-        WS["/ws<br/>許可イベントのみ転送<br/>APIキー・履歴・検索ツールはここ"]
-    end
-    subgraph O["OpenAI"]
-        RT["Realtime API<br/>(gpt-realtime)"]
-    end
-    MIC -- "音声 (base64 PCM16)" --> WS
-    WS -- "転送" --> RT
-    RT -- "音声delta / 文字起こし" --> WS
-    WS -- "転送" --> SPK
+    B["🎤 ブラウザ<br/>(frontend/)"]
+    R["FastAPI サーバー<br/>(backend/)<br/>APIキー・認証・履歴・検索ツール"]
+    O["OpenAI Realtime API<br/>(gpt-realtime)"]
+    B <== "WebRTC回線(既定):<br/>音声+イベント直結" ==> O
+    B <-- "WebSocket回線:<br/>音声+イベントを中継" --> R
+    R <--> O
+    B -. "WebRTC時: 一時キー取得<br/>検索代行・履歴送信" .-> R
 ```
 
-- 押している間: `input_audio_buffer.append`(base64 PCM16 24kHz)を送信
-- 離した時: `input_audio_buffer.commit` + `response.create`
-- 応答中に押すと `response.cancel` + 再生停止で割り込み(バージイン)
-- サーバーVAD(`turn_detection`)は無効化し、PTTで発話区間を制御
+- **PTTモード**: 押している間 `input_audio_buffer.append`、離すと `commit` + `response.create`。
+  応答中に押すと `response.cancel` + 再生停止で割り込み(バージイン)。サーバーVADは無効化し、発話区間はボタンで制御
+- **ハンズフリー通話(VAD)モード**: サーバー側の `semantic_vad` が発話の始終を自動検知して応答・バージインまで行う。
+  OpenAI側ノイズリダクション(`noise_reduction: near_field`)で物音の誤検知を抑制
+- 録音は入力デバイスのネイティブレートで取り、AudioWorkletの面積平均リサンプラで24kHz PCM16化
+  (24kHz強制のAudioContextは仮想マイクで音声が壊れるため使わない)
 - 会話の文字起こしは SQLite(`chat_history.db`)に自動保存され「履歴」タブで見返せる
 - モデルが最新情報を必要と判断すると `web_search` ツールを呼び出し、
   サーバーが OpenAI Responses API の Web 検索で調べて結果を返す(ハルシネーション対策)
@@ -47,10 +45,11 @@ flowchart LR
 ## ディレクトリ構成
 
 ```
-backend/    FastAPIサーバー(main=組み立て, relay=中継, auth=認証,
-            personas, history, search, config に分割)、personas/、.env
-frontend/   ブラウザ側一式(index.html, app.js, pcm-worklet.js, login.html)
+backend/    FastAPIサーバー(main=組み立て, relay=WS中継, webrtc=一時キー発行,
+            auth=認証, personas, history, search, config に分割)、personas/、.env
+frontend/   ブラウザ側一式(index.html, app.js, webrtc.js, pcm-worklet.js, login.html)
 infra/      Terraform(Cognito認証基盤)
+Dockerfile / compose.yaml   ローカルコンテナ起動(下記「起動」参照)
 ```
 
 ## セットアップ
