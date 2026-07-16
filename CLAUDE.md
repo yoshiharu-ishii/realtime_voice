@@ -18,7 +18,7 @@ Push-to-Talkのリアルタイム音声通話アプリ。ブラウザ ⇄ FastAP
 - **ポート8000はユーザーが自分のターミナルで起動する。Claudeの検証は8001を使い、終わったら必ず止める**
 - 検証は必ずエンドツーエンドで: 合成音声は `say -v Kyoko -o x.aiff "…" && afconvert -f WAVE -d LEI16@24000 -c 1 x.aiff x.wav`、WebSocketテストクライアントで append→commit→response.create を流す
 - 認証付きの検証: `aws cognito-idp admin-initiate-auth --auth-flow ADMIN_USER_PASSWORD_AUTH` でIDトークンを発行し、HTTPは `Authorization: Bearer`、ブラウザは `id_token` Cookieに注入。テストユーザーのパスワードが不明なら `admin-set-user-password --permanent` で再設定
-- ブラウザペインはマイク権限がないため、実マイクの録音テストはユーザーに依頼する。ただし**getUserMediaを差し替えれば偽マイクでE2E可能**: `AudioContext`+`createMediaStreamDestination()` のstreamを返すよう`navigator.mediaDevices.getUserMedia`を上書きし、sayで作ったWAVを`AudioBufferSourceNode`でdestへ再生するとWebRTC経由でも文字起こしまで検証できる(テスト用WAVは一時的にfrontend/へ置いて配信し、終わったら削除)
+- ブラウザペインはマイク権限がないため、実マイクの録音テストはユーザーに依頼する。ただし**getUserMediaを差し替えれば偽マイクでE2E可能**: `AudioContext`+`createMediaStreamDestination()` のstreamを返すよう`navigator.mediaDevices.getUserMedia`を上書きし、sayで作ったWAVを`AudioBufferSourceNode`でdestへ再生するとWebRTC経由でも文字起こしまで検証できる(テスト用WAVは一時的にfrontend/へ置いて配信し、終わったら削除)。**罠2つ**: (1) getUserMediaは呼ばれるたびに新しいdestを返すこと(同じstreamを返すと再接続時にstop済みの死んだトラックを配ってしまう) (2) destには**ゲイン0の発振器を常時接続しておく**こと(ソースが繋がっていない間はフレームが生成されず、WebRTCのRTPパケットが止まりserver_vadが凍る)
 - プレビューランチャー(launch.json)はサンドボックスがvenvを読めず使えない。Bashバックグラウンド起動+ブラウザで確認
 
 ## アーキテクチャの要点(ハマりどころ)

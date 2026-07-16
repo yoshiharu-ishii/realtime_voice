@@ -337,6 +337,10 @@ function setStatus(msg, isError = false) {
 }
 
 let reconnectTimer = null;
+// 接続の世代番号。connect()のたびに増える。非同期の接続処理(特にWebRTCの
+// SDP交換)は、await明けに世代が変わっていたら自分は古い接続要求だと判断して
+// 中断する。これがないと、素早い切替時に古い処理が新しい接続を上書き破壊する
+let connectSeq = 0;
 
 // サーバー/OpenAIイベントの共通ハンドラ(WSモードは中継経由、
 // WebRTCモードはデータチャネル経由で同じイベントが届く)
@@ -434,7 +438,13 @@ function handleServerEvent(ev) {
       currentAiTurn = null;
       // 検索を伴わない応答完了なら通常待機へ(検索トリガーの応答完了時は
       // 直後に proxy.search が来てロックされる)
-      if (!searching) setStatus('待機中(ボタンを押して話してください)');
+      if (!searching) {
+        setStatus(
+          isHandsFree()
+            ? '📞 通話中(そのまま話しかけてください)'
+            : '待機中(ボタンを押して話してください)'
+        );
+      }
       break;
     case 'response.created':
       responseActive = true;
@@ -448,6 +458,7 @@ function handleServerEvent(ev) {
 }
 
 function connect() {
+  connectSeq++; // 進行中の古い接続処理をすべて無効化
   // 多重接続の防止: 予約済みの再接続タイマーを消し、旧ソケットは
   // イベントハンドラを外してから閉じる(残った旧セッションの応答が
   // 画面や音声に混ざる事故を防ぐ)
