@@ -89,7 +89,6 @@ function logout() {
 
 document.getElementById('logoutBtn').addEventListener('click', logout);
 let responseActive = false; // AIの応答が進行中か(response.cancel の送信判断に使う)
-let personaChanging = false; // ペルソナ切替による意図的な再接続中か
 let searching = false; // Web検索の実行中か(完了までPTTをロックする)
 let searchUnlockTimer = null;
 const personaSel = document.getElementById('persona');
@@ -98,7 +97,9 @@ const PTT_LABEL = '押している間だけ話す(またはスペースキー長
 
 function setSearchLock(on) {
   searching = on;
-  pttBtn.disabled = on || !ws || ws.readyState !== WebSocket.OPEN;
+  // 回線の接続状態はトランスポート共通の判定を使う(WS前提の !ws チェックだと
+  // WebRTCモードで解除時も常にdisabledになるバグがあった)
+  pttBtn.disabled = on || !transportConnected();
   if (on) {
     pttBtn.textContent = '🔍 検索中…(終わるまで待ってね)';
     // 万一完了イベントを取りこぼしても永久ロックにならないよう保険
@@ -158,7 +159,8 @@ function teardownCapture() {
   captureReady = false;
 }
 
-async function setupCapture() {
+// マイク取得(WS/WebRTC両モード共通。選択デバイス+フォールバック込み)
+async function getMicStream() {
   const constraints = {
     channelCount: 1,
     echoCancellation: true,
@@ -169,18 +171,22 @@ async function setupCapture() {
     voiceIsolation: true,
   };
   if (micSel.value) constraints.deviceId = { exact: micSel.value };
-  let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+    return await navigator.mediaDevices.getUserMedia({ audio: constraints });
   } catch (err) {
     if (!micSel.value) throw err;
     // 選択したマイクが外された等で使えない場合は既定のマイクにフォールバック
     delete constraints.deviceId;
     micSel.value = '';
     localStorage.removeItem('micId');
-    stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
     setStatus('選択したマイクが使えないため、既定のマイクに切り替えました');
+    return stream;
   }
+}
+
+async function setupCapture() {
+  const stream = await getMicStream();
   captureStream = stream;
   // 24kHz指定でコンテキストを作れれば、ブラウザ内蔵の高品質リサンプラが
   // マイク入力を変換してくれる(ワークレット側の簡易リサンプラより高精度)
@@ -259,9 +265,15 @@ micSel.addEventListener('change', () => {
   micSel.blur(); // フォーカスを外し、スペースキーをPTTに戻す
   if (micSel.value) localStorage.setItem('micId', micSel.value);
   else localStorage.removeItem('micId');
-  // 次にボタンを押したとき、選択したマイクで録音チェーンを作り直す
-  teardownCapture();
   const label = micSel.selectedOptions[0]?.textContent || '既定のマイク';
+  if (isWebRTC()) {
+    // WebRTCはマイクトラックが接続に焼き込まれているため張り直す
+    setStatus(`マイクを「${label}」に切り替えます…`);
+    connect();
+    return;
+  }
+  // WSモードは次にボタンを押したとき、選択したマイクで録音チェーンを作り直す
+  teardownCapture();
   setStatus(`マイクを「${label}」に切り替えました`);
 });
 
@@ -291,6 +303,98 @@ function setStatus(msg, isError = false) {
 
 let reconnectTimer = null;
 
+// サーバー/OpenAIイベントの共通ハンドラ(WSモードは中継経由、
+// WebRTCモードはデータチャネル経由で同じイベントが届く)
+function handleServerEvent(ev) {
+  switch (ev.type) {
+    case 'proxy.ready':
+      setStatus(`接続完了 (model: ${ev.model} / ペルソナ: ${ev.persona || '標準'})`);
+      pttBtn.disabled = false;
+      break;
+    case 'proxy.search': {
+      setStatus(`🔍 Web検索中: ${ev.query}`);
+      appendTurn('🔍 検索').textContent = ev.query;
+      // 検索が終わって応答が再開するまで発話をロック
+      // (検索中に話すと、検索結果と新しい発話への応答が混線するため)
+      setSearchLock(true);
+      break;
+    }
+    case 'proxy.error':
+      if (ev.message?.includes('認証')) {
+        // トークン期限切れなど。Cookieを破棄して門番ページ経由で再ログイン
+        setStatus('認証が切れました。ログイン画面へ移動します…', true);
+        requireLogin();
+        return;
+      }
+      fatalError = true;
+      setStatus(`${ev.message} (修正後にページを再読み込みしてください)`, true);
+      pttBtn.disabled = true;
+      break;
+    case 'error':
+      console.error('OpenAI error:', ev);
+      // キャンセル対象なしはタイミング起因で起こり得る無害なエラーなので表示しない
+      if (!`${ev.error?.message}`.includes('no active response')) {
+        setStatus(`エラー: ${ev.error?.message || JSON.stringify(ev)}`, true);
+      }
+      break;
+    // 応答音声 (GA / beta 両対応)。WebRTCモードでは音声はトラックで届くため
+    // このイベントは飛んでこない(来ても無害)
+    case 'response.output_audio.delta':
+    case 'response.audio.delta':
+      playPcm16Base64(ev.delta);
+      break;
+    // 自分の発話の文字起こし
+    case 'conversation.item.input_audio_transcription.delta':
+      if (!currentUserTurn) currentUserTurn = appendTurn('あなた');
+      if (currentUserTurn.dataset.pending) {
+        currentUserTurn.textContent = '';
+        delete currentUserTurn.dataset.pending;
+      }
+      currentUserTurn.textContent += ev.delta;
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+      break;
+    case 'conversation.item.input_audio_transcription.completed':
+      if (!currentUserTurn) currentUserTurn = appendTurn('あなた');
+      currentUserTurn.textContent = ev.transcript;
+      delete currentUserTurn.dataset.pending;
+      currentUserTurn = null;
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+      if (isWebRTC()) logHistory('user', ev.transcript || '');
+      break;
+    case 'conversation.item.input_audio_transcription.failed':
+      if (currentUserTurn) currentUserTurn.textContent = '(文字起こしに失敗しました)';
+      currentUserTurn = null;
+      break;
+    // 応答の文字起こし
+    case 'response.output_audio_transcript.delta':
+    case 'response.audio_transcript.delta':
+      if (!currentAiTurn) currentAiTurn = appendTurn('AI');
+      currentAiTurn.textContent += ev.delta;
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+      break;
+    // 応答の文字起こし確定(WSモードは中継が履歴保存するのでログ不要)
+    case 'response.output_audio_transcript.done':
+    case 'response.audio_transcript.done':
+      if (isWebRTC()) logHistory('assistant', ev.transcript || '');
+      break;
+    case 'response.done':
+      responseActive = false;
+      currentAiTurn = null;
+      // 検索を伴わない応答完了なら通常待機へ(検索トリガーの応答完了時は
+      // 直後に proxy.search が来てロックされる)
+      if (!searching) setStatus('待機中(ボタンを押して話してください)');
+      break;
+    case 'response.created':
+      responseActive = true;
+      // 応答ごとに表示ターンを分ける(連続する応答の文字起こしが
+      // 同じ行に連結されるのを防ぐ)
+      currentAiTurn = null;
+      if (searching) setSearchLock(false); // 検索完了→応答再開でロック解除
+      setStatus('AIが応答中…');
+      break;
+  }
+}
+
 function connect() {
   // 多重接続の防止: 予約済みの再接続タイマーを消し、旧ソケットは
   // イベントハンドラを外してから閉じる(残った旧セッションの応答が
@@ -302,7 +406,9 @@ function connect() {
   if (ws) {
     ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
     try { ws.close(); } catch (_) {}
+    ws = null;
   }
+  teardownWebRTC(); // WebRTC側の旧接続も必ず始末(電話は常に1本)
   // 前のセッションの表示・再生状態をリセット
   stopPlayback();
   currentAiTurn = null;
@@ -315,6 +421,12 @@ function connect() {
     pttBtn.classList.remove('talking');
   }
   pttBtn.textContent = PTT_LABEL;
+
+  // 回線がWebRTC(直結)ならこちら。以降はWebSocket(中継)
+  if (isWebRTC()) {
+    connectWebRTC();
+    return;
+  }
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const persona = encodeURIComponent(personaSel.value || 'default');
@@ -332,97 +444,12 @@ function connect() {
   ws.onmessage = (e) => {
     let ev;
     try { ev = JSON.parse(e.data); } catch (_) { return; }
-
-    switch (ev.type) {
-      case 'proxy.ready':
-        setStatus(`接続完了 (model: ${ev.model} / ペルソナ: ${ev.persona || '標準'})`);
-        pttBtn.disabled = false;
-        break;
-      case 'proxy.search': {
-        setStatus(`🔍 Web検索中: ${ev.query}`);
-        appendTurn('🔍 検索').textContent = ev.query;
-        // 検索が終わって応答が再開するまで発話をロック
-        // (検索中に話すと、検索結果と新しい発話への応答が混線するため)
-        setSearchLock(true);
-        break;
-      }
-      case 'proxy.error':
-        if (ev.message?.includes('認証')) {
-          // トークン期限切れなど。Cookieを破棄して門番ページ経由で再ログイン
-          setStatus('認証が切れました。ログイン画面へ移動します…', true);
-          requireLogin();
-          return;
-        }
-        fatalError = true;
-        setStatus(`${ev.message} (修正後にページを再読み込みしてください)`, true);
-        pttBtn.disabled = true;
-        break;
-      case 'error':
-        console.error('OpenAI error:', ev);
-        // キャンセル対象なしはタイミング起因で起こり得る無害なエラーなので表示しない
-        if (!`${ev.error?.message}`.includes('no active response')) {
-          setStatus(`エラー: ${ev.error?.message || JSON.stringify(ev)}`, true);
-        }
-        break;
-      // 応答音声 (GA / beta 両対応)
-      case 'response.output_audio.delta':
-      case 'response.audio.delta':
-        playPcm16Base64(ev.delta);
-        break;
-      // 自分の発話の文字起こし
-      case 'conversation.item.input_audio_transcription.delta':
-        if (!currentUserTurn) currentUserTurn = appendTurn('あなた');
-        if (currentUserTurn.dataset.pending) {
-          currentUserTurn.textContent = '';
-          delete currentUserTurn.dataset.pending;
-        }
-        currentUserTurn.textContent += ev.delta;
-        transcriptEl.scrollTop = transcriptEl.scrollHeight;
-        break;
-      case 'conversation.item.input_audio_transcription.completed':
-        if (!currentUserTurn) currentUserTurn = appendTurn('あなた');
-        currentUserTurn.textContent = ev.transcript;
-        delete currentUserTurn.dataset.pending;
-        currentUserTurn = null;
-        transcriptEl.scrollTop = transcriptEl.scrollHeight;
-        break;
-      case 'conversation.item.input_audio_transcription.failed':
-        if (currentUserTurn) currentUserTurn.textContent = '(文字起こしに失敗しました)';
-        currentUserTurn = null;
-        break;
-      // 応答の文字起こし
-      case 'response.output_audio_transcript.delta':
-      case 'response.audio_transcript.delta':
-        if (!currentAiTurn) currentAiTurn = appendTurn('AI');
-        currentAiTurn.textContent += ev.delta;
-        transcriptEl.scrollTop = transcriptEl.scrollHeight;
-        break;
-      case 'response.done':
-        responseActive = false;
-        currentAiTurn = null;
-        // 検索を伴わない応答完了なら通常待機へ(検索トリガーの応答完了時は
-        // 直後に proxy.search が来てロックされる)
-        if (!searching) setStatus('待機中(ボタンを押して話してください)');
-        break;
-      case 'response.created':
-        responseActive = true;
-        // 応答ごとに表示ターンを分ける(連続する応答の文字起こしが
-        // 同じ行に連結されるのを防ぐ)
-        currentAiTurn = null;
-        if (searching) setSearchLock(false); // 検索完了→応答再開でロック解除
-        setStatus('AIが応答中…');
-        break;
-    }
+    handleServerEvent(ev);
   };
 
   ws.onclose = () => {
     pttBtn.disabled = true;
     responseActive = false;
-    if (personaChanging) { // ペルソナ切替時は即座に繋ぎ直す
-      personaChanging = false;
-      connect();
-      return;
-    }
     if (fatalError) return; // 設定エラー時はメッセージを残し再接続しない
     setStatus('切断されました。3秒後に再接続します…', true);
     if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -432,10 +459,26 @@ function connect() {
 }
 
 // ---- Push-to-Talk 操作 ----
+// 制御イベントの送信を回線で振り分ける(WS=中継へ、WebRTC=データチャネルへ)
+function sendEvent(obj) {
+  if (isWebRTC()) {
+    sendEventRTC(obj);
+  } else if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+function transportConnected() {
+  return isWebRTC() ? webrtcReady() : !!ws && ws.readyState === WebSocket.OPEN;
+}
+
+let pressStartedAt = 0; // WebRTCモードの「短すぎ判定」用(サンプル数を数えられないため)
+
 async function startTalking() {
-  if (talking || pttBtn.disabled || !ws || ws.readyState !== WebSocket.OPEN) return;
+  if (talking || pttBtn.disabled || !transportConnected()) return;
   if (playCtx.state === 'suspended') await playCtx.resume();
-  if (!captureReady) {
+  if (!isWebRTC() && !captureReady) {
+    // WSモードはワークレット録音チェーンを遅延構築(WebRTCは接続時にマイク取得済み)
     setStatus('マイク準備中…');
     try {
       await setupCapture();
@@ -447,11 +490,13 @@ async function startTalking() {
   // 割り込み: 再生を止め、応答が進行中の場合のみキャンセルを送る
   stopPlayback();
   if (responseActive) {
-    ws.send(JSON.stringify({ type: 'response.cancel' }));
+    sendEvent({ type: 'response.cancel' });
     responseActive = false;
   }
-  ws.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+  sendEvent({ type: 'input_audio_buffer.clear' });
   sentSamples = 0;
+  pressStartedAt = Date.now();
+  if (isWebRTC()) webrtcSetMic(true); // 押している間だけトラックを有効化
   talking = true;
   pttBtn.classList.add('talking');
   pttBtn.textContent = '🔴 録音中… 離すと送信';
@@ -464,14 +509,18 @@ function stopTalking() {
   pttBtn.classList.remove('talking');
   pttBtn.textContent = PTT_LABEL;
   meterBar.style.width = '0%';
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  if (sentSamples < 2400) { // 100ms 未満は commit がエラーになるため破棄
-    ws.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+  if (isWebRTC()) webrtcSetMic(false);
+  if (!transportConnected()) return;
+  // 100ms 未満は commit がエラーになるため破棄
+  // (WebRTCはサンプル数を数えられないので押下時間で代用)
+  const tooShort = isWebRTC() ? Date.now() - pressStartedAt < 150 : sentSamples < 2400;
+  if (tooShort) {
+    sendEvent({ type: 'input_audio_buffer.clear' });
     setStatus('短すぎました。もう一度押して話してください');
     return;
   }
-  ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
-  ws.send(JSON.stringify({ type: 'response.create' }));
+  sendEvent({ type: 'input_audio_buffer.commit' });
+  sendEvent({ type: 'response.create' });
   currentUserTurn = appendTurn('あなた');
   currentUserTurn.textContent = '(文字起こし中…)';
   currentUserTurn.dataset.pending = '1';
@@ -602,12 +651,17 @@ personaSel.addEventListener('change', () => {
   const name = personaSel.selectedOptions[0]?.textContent || personaSel.value;
   appendTurn('⚙️').textContent = `ペルソナを「${name}」に切り替え(新しいセッションを開始)`;
   stopPlayback();
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    personaChanging = true;
-    ws.close(); // onclose が即座に新ペルソナで繋ぎ直す
-  } else {
-    connect();
-  }
+  connect(); // connect()が両回線の旧接続を始末してから張り直す
+});
+
+// ---- 回線(トランスポート)切り替え ----
+transportSel.addEventListener('change', () => {
+  transportSel.blur();
+  localStorage.setItem('transport', transportSel.value);
+  const label = transportSel.selectedOptions[0]?.textContent || transportSel.value;
+  appendTurn('⚙️').textContent = `回線を「${label}」に切り替え(新しいセッションを開始)`;
+  stopPlayback();
+  connect();
 });
 
 (async () => {
@@ -619,6 +673,11 @@ personaSel.addEventListener('change', () => {
   // ループガード用カウンタをリセットする
   sessionStorage.removeItem('auth_redirects');
   sessionStorage.removeItem('login_failures');
+  // 前回選んだ回線を復元
+  const savedTransport = localStorage.getItem('transport');
+  if (savedTransport && [...transportSel.options].some((o) => o.value === savedTransport)) {
+    transportSel.value = savedTransport;
+  }
   await initPersonas();
   connect();
 })();

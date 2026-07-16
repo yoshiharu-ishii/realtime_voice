@@ -1,0 +1,206 @@
+// WebRTC直結モード。
+// WebSocket中継と違い、音声もイベントもブラウザ⇄OpenAI直結。
+// サーバーは一時キー発行・検索代行(/api/search)・履歴受け取り(/api/history/log)のみ。
+// このファイルは app.js より先に読み込まれ、app.js のグローバル
+// (setStatus, handleServerEvent, authHeaders, personaSel など)を実行時に参照する。
+
+const transportSel = document.getElementById('transport');
+const remoteAudioEl = document.getElementById('remoteAudio');
+
+let pc = null; // RTCPeerConnection
+let dc = null; // データチャネル "oai-events"
+let rtcStream = null; // マイクのMediaStream
+let rtcReady = false;
+let rtcSessionId = '';
+let rtcMeterCtx = null;
+
+function isWebRTC() {
+  return transportSel.value === 'webrtc';
+}
+
+function webrtcReady() {
+  return rtcReady;
+}
+
+// PTT: 押している間だけマイクトラックを有効化(無効中は無音が流れる。
+// 押した瞬間に input_audio_buffer.clear するので無音は捨てられる)
+function webrtcSetMic(on) {
+  const track = rtcStream?.getAudioTracks()[0];
+  if (track) track.enabled = on;
+}
+
+function sendEventRTC(obj) {
+  if (dc && dc.readyState === 'open') dc.send(JSON.stringify(obj));
+}
+
+async function connectWebRTC() {
+  // 1) サーバーからペルソナ設定入りの一時キーをもらう(APIキーは受け取らない)
+  setStatus('一時キーを取得中…');
+  let secret;
+  try {
+    const persona = encodeURIComponent(personaSel.value || 'default');
+    const res = await fetch(`/api/webrtc/secret?persona=${persona}`, { headers: authHeaders() });
+    if (res.status === 401) { requireLogin(); return; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    secret = await res.json();
+  } catch (err) {
+    setStatus(`一時キーの取得に失敗: ${err.message}`, true);
+    scheduleRtcReconnect();
+    return;
+  }
+
+  // 2) マイク取得(WSモードと同じ制約: 選択デバイス・voiceIsolation等)
+  try {
+    rtcStream = await getMicStream();
+  } catch (err) {
+    setStatus(`マイクを使用できません: ${err.message}`, true);
+    return;
+  }
+  webrtcSetMic(false); // PTT: 押すまで送らない
+  initMics(); // 権限取得後はデバイス名が読めるので一覧更新
+
+  // 3) PeerConnection: 送り=マイクトラック、受け=リモート音声トラック
+  pc = new RTCPeerConnection();
+  pc.ontrack = (e) => { remoteAudioEl.srcObject = e.streams[0]; };
+  pc.addTrack(rtcStream.getAudioTracks()[0], rtcStream);
+  attachRtcMeter(rtcStream);
+
+  // 4) イベントはデータチャネル "oai-events" でJSONそのまま
+  dc = pc.createDataChannel('oai-events');
+  dc.onmessage = (e) => {
+    let ev;
+    try { ev = JSON.parse(e.data); } catch (_) { return; }
+    maybeHandleFunctionCalls(ev); // function callingはブラウザが自前処理
+    handleServerEvent(ev); // 表示系はWSモードと共通ハンドラ
+  };
+  dc.onopen = () => {
+    rtcReady = true;
+    setStatus(`接続完了 (model: ${secret.model} / ペルソナ: ${secret.persona} / WebRTC直結)`);
+    pttBtn.disabled = false;
+  };
+  pc.onconnectionstatechange = () => {
+    if (['failed', 'disconnected', 'closed'].includes(pc?.connectionState) && rtcReady) {
+      rtcReady = false;
+      pttBtn.disabled = true;
+      scheduleRtcReconnect();
+    }
+  };
+
+  // 5) SDP交換(セキュアブラウザ環境で片通話になり得るのはこの経路)
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  setStatus('OpenAIへ接続中…(WebRTC)');
+  let sdpRes;
+  try {
+    sdpRes = await fetch(
+      `https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(secret.model)}`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${secret.value}`, 'Content-Type': 'application/sdp' },
+        body: offer.sdp,
+      }
+    );
+  } catch (err) {
+    setStatus(`WebRTC接続に失敗: ${err.message}`, true);
+    scheduleRtcReconnect();
+    return;
+  }
+  if (!sdpRes.ok) {
+    setStatus(`WebRTC接続に失敗: HTTP ${sdpRes.status}`, true);
+    scheduleRtcReconnect();
+    return;
+  }
+  await pc.setRemoteDescription({ type: 'answer', sdp: await sdpRes.text() });
+
+  // 履歴用のセッションID(WebRTCではサーバーが会話を見ないため、ブラウザが採番して送る)
+  rtcSessionId =
+    new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15) +
+    '-rtc' + Math.random().toString(36).slice(2, 6);
+}
+
+function scheduleRtcReconnect() {
+  if (fatalError) return;
+  setStatus('切断されました。3秒後に再接続します…', true);
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(connect, 3000);
+}
+
+function teardownWebRTC() {
+  rtcReady = false;
+  if (dc) { try { dc.close(); } catch (_) {} dc = null; }
+  if (pc) {
+    pc.onconnectionstatechange = null;
+    try { pc.close(); } catch (_) {}
+    pc = null;
+  }
+  if (rtcStream) {
+    rtcStream.getTracks().forEach((t) => t.stop());
+    rtcStream = null;
+  }
+  if (rtcMeterCtx) { rtcMeterCtx.close().catch(() => {}); rtcMeterCtx = null; }
+  if (remoteAudioEl) remoteAudioEl.srcObject = null;
+}
+
+// レベルインジケーター(WSモードのワークレットの代わりにAnalyserNodeで)
+function attachRtcMeter(stream) {
+  rtcMeterCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const source = rtcMeterCtx.createMediaStreamSource(stream);
+  const analyser = rtcMeterCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  source.connect(analyser);
+  const buf = new Float32Array(analyser.fftSize);
+  const loop = () => {
+    if (!rtcMeterCtx || rtcMeterCtx.state === 'closed') return;
+    analyser.getFloatTimeDomainData(buf);
+    updateMeter(buf);
+    requestAnimationFrame(loop);
+  };
+  loop();
+}
+
+// function calling: WebRTCモードではイベントがブラウザに直接届くので、
+// 検索の実行だけサーバー(/api/search)へ代行依頼し、結果をデータチャネルで返す
+async function maybeHandleFunctionCalls(ev) {
+  if (ev.type !== 'response.done') return;
+  const calls = (ev.response?.output || []).filter(
+    (i) => i.type === 'function_call' && i.name === 'web_search'
+  );
+  if (!calls.length) return;
+  for (const call of calls) {
+    let query = '';
+    try { query = JSON.parse(call.arguments || '{}').query || ''; } catch (_) {}
+    setStatus(`🔍 Web検索中: ${query}`);
+    appendTurn('🔍 検索').textContent = query;
+    setSearchLock(true);
+    logHistory('search', query);
+    let result = '検索に失敗しました';
+    try {
+      const res = await fetch('/api/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ query }),
+      });
+      if (res.ok) result = (await res.json()).result;
+    } catch (_) { /* resultは失敗文言のまま */ }
+    sendEventRTC({
+      type: 'conversation.item.create',
+      item: { type: 'function_call_output', call_id: call.call_id, output: result },
+    });
+  }
+  sendEventRTC({ type: 'response.create' }); // 検索結果を踏まえた応答を再開
+}
+
+// 履歴: WebRTCモードでは中継サーバーが会話を見ないため、ブラウザから送る
+function logHistory(role, text) {
+  if (!text || !isWebRTC()) return;
+  fetch('/api/history/log', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({
+      session_id: rtcSessionId,
+      role,
+      text,
+      persona: personaSel.selectedOptions[0]?.textContent || '',
+    }),
+  }).catch(() => { /* 履歴は補助機能なので失敗しても会話は止めない */ });
+}

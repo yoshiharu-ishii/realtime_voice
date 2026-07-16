@@ -103,7 +103,7 @@
       font-size: 0.9rem;
       flex-wrap: wrap;
     }
-    #persona, #mic {
+    #persona, #mic, #transport {
       flex: 1;
       min-width: 140px;
       max-width: 240px;
@@ -175,6 +175,11 @@
       <select id="persona"></select>
       <label for="mic">🎤:</label>
       <select id="mic"><option value="">既定のマイク</option></select>
+      <label for="transport">回線:</label>
+      <select id="transport">
+        <option value="ws">WebSocket(中継)</option>
+        <option value="webrtc">WebRTC(直結)</option>
+      </select>
     </div>
     <div id="status">接続中…</div>
     <div id="transcript"></div>
@@ -191,6 +196,9 @@
     <div id="historyList"></div>
   </div>
 
+  <!-- WebRTC直結モードのリモート音声再生用(画面には出さない) -->
+  <audio id="remoteAudio" autoplay hidden></audio>
+  <script src="/static/webrtc.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
