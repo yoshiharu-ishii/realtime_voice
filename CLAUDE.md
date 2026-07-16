@@ -7,7 +7,7 @@ Push-to-Talkのリアルタイム音声通話アプリ。ブラウザ ⇄ FastAP
 
 ## 構成
 
-- `backend/` — FastAPI (main.py)、ペルソナ定義(personas/*.md)、uv管理(pyproject.toml)。`.env` と `chat_history.db` もここ(gitignore済み)
+- `backend/` — FastAPI。モジュール分割済み: `main.py`(組み立て+ルーティングのみ) / `config.py`(環境変数) / `auth.py`(Cognito) / `relay.py`(WebSocket中継の本体) / `personas.py` / `history.py`(SQLite) / `search.py`(web_searchツール)。ペルソナ定義(personas/*.md)、uv管理(pyproject.toml)、`.env` と `chat_history.db` もここ(gitignore済み)
 - `frontend/` — index.html / app.js / pcm-worklet.js / login.html。URLパスは `/static/...` のまま配信元だけこのディレクトリ
 - `infra/` — Terraform(Cognito一式)。stateはローカル(gitignore済み)
 
