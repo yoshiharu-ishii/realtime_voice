@@ -96,23 +96,34 @@
     #ptt.talking { background: var(--accent-active); }
     #ptt:disabled { opacity: 0.5; cursor: not-allowed; }
     .hint { font-size: 0.8rem; opacity: 0.6; text-align: center; margin: 0; }
+    /* 設定4つは2×2グリッド。ラベルを上に置いてセレクトに幅を全部使わせる
+       (横並び+max-widthだと長いマイク名・回線名が見切れる) */
     #controls {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 0.9rem;
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px 12px;
     }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0; /* グリッドの子が内容幅で膨らんで枠を壊すのを防ぐ */
+    }
+    .field label { font-size: 0.75rem; opacity: 0.65; }
     #persona, #mic, #transport, #mode {
-      flex: 1;
-      min-width: 140px;
-      max-width: 240px;
+      width: 100%;
+      box-sizing: border-box;
       padding: 6px 10px;
       font-size: 0.9rem;
       border: 1px solid var(--border);
       border-radius: 6px;
       background: transparent;
       color: inherit;
+      cursor: pointer;
+      /* 幅に収まらないときは「…」で切れていることを明示(titleで全文が見える) */
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     /* PTTボタン直上の入力レベルインジケーター(音量で緑→黄→赤) */
     #meterWrap {
@@ -171,20 +182,28 @@
 
   <div id="view-call">
     <div id="controls">
-      <label for="persona">ペルソナ:</label>
-      <select id="persona"></select>
-      <label for="mic">🎤:</label>
-      <select id="mic"><option value="">既定のマイク</option></select>
-      <label for="transport">回線:</label>
-      <select id="transport">
-        <option value="webrtc" selected>WebRTC(直結・高精度)</option>
-        <option value="ws">WebSocket(中継・全部見える)</option>
-      </select>
-      <label for="mode">モード:</label>
-      <select id="mode">
-        <option value="ptt" selected>押して話す(PTT)</option>
-        <option value="vad">ハンズフリー通話(VAD)</option>
-      </select>
+      <div class="field">
+        <label for="persona">ペルソナ</label>
+        <select id="persona"></select>
+      </div>
+      <div class="field">
+        <label for="mic">🎤 マイク</label>
+        <select id="mic"><option value="">既定のマイク</option></select>
+      </div>
+      <div class="field">
+        <label for="transport">回線</label>
+        <select id="transport">
+          <option value="webrtc" selected>WebRTC(直結・高精度)</option>
+          <option value="ws">WebSocket(中継・全部見える)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="mode">モード</label>
+        <select id="mode">
+          <option value="ptt" selected>押して話す(PTT)</option>
+          <option value="vad">ハンズフリー通話(VAD)</option>
+        </select>
+      </div>
     </div>
     <div id="status">接続中…</div>
     <div id="transcript"></div>
