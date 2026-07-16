@@ -759,6 +759,20 @@ modeSel.addEventListener('change', () => {
   connect();
 });
 
+// 見切れ対策: セレクトの幅に収まらない選択肢でも、ホバー(title)で全文を
+// 確認できるようにする。マイク・ペルソナの一覧は非同期で差し替わるため、
+// change だけでなく選択肢の入れ替え(childList)も監視して同期する
+const syncSelectTitles = () => {
+  for (const sel of [personaSel, micSel, transportSel, modeSel]) {
+    sel.title = sel.selectedOptions[0]?.textContent || '';
+  }
+};
+for (const sel of [personaSel, micSel, transportSel, modeSel]) {
+  sel.addEventListener('change', syncSelectTitles);
+  new MutationObserver(syncSelectTitles).observe(sel, { childList: true });
+}
+syncSelectTitles();
+
 (async () => {
   // 認可コード等のクエリが残っていたらアドレスバーと履歴から消す(保険。
   // 通常はサーバー側のリダイレクトで浄化される)
@@ -778,5 +792,7 @@ modeSel.addEventListener('change', () => {
     modeSel.value = savedMode;
   }
   await initPersonas();
+  // localStorage復元はchangeイベントを発火しないため、titleを明示的に同期
+  syncSelectTitles();
   connect();
 })();
