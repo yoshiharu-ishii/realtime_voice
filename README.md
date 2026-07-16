@@ -65,9 +65,29 @@ uv sync                # .venv 作成 + 依存インストール
 
 ## 起動
 
+### ネイティブ(uv)
+
 ```bash
 cd backend
 uv run uvicorn main:app --port 8000
+```
+
+### コンテナ(Docker)
+
+```bash
+docker compose up --build
+```
+
+どちらも同じポート8000・同じ使い勝手。コンテナ版は `backend/.env` を
+env_file として注入し(イメージには焼き込まない)、会話履歴は名前付き
+ボリューム `chat-history`(コンテナ内 `/data`)に永続化されるため、
+コンテナを作り直しても残る。DBの置き場は環境変数 `DB_PATH` で変更可能。
+
+別ポートで検証用に立てる場合(開発中の約束事: 検証は8001):
+
+```bash
+docker build -t realtime-voice .
+docker run --rm -p 8001:8000 --env-file backend/.env realtime-voice
 ```
 
 ブラウザで http://localhost:8000 を開き、ボタン(またはスペースキー)を
