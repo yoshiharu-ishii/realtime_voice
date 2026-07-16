@@ -365,7 +365,17 @@ function handleServerEvent(ev) {
       }
       break;
     case 'input_audio_buffer.speech_stopped':
-      if (isHandsFree()) setStatus('考え中…');
+      if (isHandsFree()) {
+        setStatus('考え中…');
+        // 入力の文字起こしはAIの応答より遅れて届くため、先に「あなた」の
+        // 枠を確保しておく。これがないと表示が(AI応答→自分の発話)の順に
+        // ひっくり返る(PTTモードのボタン離し時の枠取りと同じ役割)
+        if (!currentUserTurn) {
+          currentUserTurn = appendTurn('あなた');
+          currentUserTurn.textContent = '(文字起こし中…)';
+          currentUserTurn.dataset.pending = '1';
+        }
+      }
       break;
     case 'proxy.search': {
       setStatus(`🔍 Web検索中: ${ev.query}`);
