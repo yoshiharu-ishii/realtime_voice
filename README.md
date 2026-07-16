@@ -41,7 +41,8 @@ flowchart LR
 ## ディレクトリ構成
 
 ```
-backend/    FastAPIサーバー(main.py)、personas/、pyproject.toml、.env
+backend/    FastAPIサーバー(main=組み立て, relay=中継, auth=認証,
+            personas, history, search, config に分割)、personas/、.env
 frontend/   ブラウザ側一式(index.html, app.js, pcm-worklet.js, login.html)
 infra/      Terraform(Cognito認証基盤)
 ```
