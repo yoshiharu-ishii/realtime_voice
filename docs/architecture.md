@@ -203,3 +203,8 @@ flowchart TB
 VADモードの追加挙動: 検索中は自動ミュート(検索結果と新規発話の混線防止)、
 WSモードでは speech_started 受信時にローカル再生を停止(バージイン)。
 PTTは無線機、VADは電話——用途で使い分ける。
+
+誤検知対策(2段構え): ブラウザ側は getUserMedia の noiseSuppression / echoCancellation /
+autoGainControl、OpenAI側はセッション設定の `noise_reduction: near_field`(VADと文字起こしの
+手前で入力を掃除する)。机を叩くなどの衝撃音を発話と誤認するのを抑える。両回線共通
+(`build_session_config` で埋め込むため、WS中継でもWebRTC直結でも効く)。
