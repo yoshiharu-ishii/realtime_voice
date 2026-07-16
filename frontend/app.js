@@ -221,15 +221,14 @@ async function getMicStream() {
 async function setupCapture() {
   const stream = await getMicStream();
   captureStream = stream;
-  // 24kHz指定でコンテキストを作れれば、ブラウザ内蔵の高品質リサンプラが
-  // マイク入力を変換してくれる(ワークレット側の簡易リサンプラより高精度)
-  let ctx;
-  try {
-    ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
-  } catch (_) {
-    ctx = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  console.log('capture sample rate:', ctx.sampleRate);
+  // コンテキストは必ずネイティブレートで開き、24kHz化はワークレットの
+  // 面積平均リサンプラに任せる。以前は24kHz指定のコンテキストを優先していたが、
+  // レート強制はOS側のデバイス設定に介入するため、iPhone連携マイク等の
+  // 仮想デバイスで「実レートとラベルがずれた音声」になり、文字起こしが
+  // 完全に崩壊する(こもった声・無関係な文への作話)。WebRTC回線が無事なのは
+  // Chrome内蔵のWebRTCスタック(ネイティブレート)を使いこの経路を通らないため
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  console.log('capture sample rate:', ctx.sampleRate, '→ 24000 (worklet resample)');
   await ctx.audioWorklet.addModule('/static/pcm-worklet.js');
   const source = ctx.createMediaStreamSource(stream);
   const node = new AudioWorkletNode(ctx, 'pcm-capture');
