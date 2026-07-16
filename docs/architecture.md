@@ -208,3 +208,23 @@ PTTは無線機、VADは電話——用途で使い分ける。
 autoGainControl、OpenAI側はセッション設定の `noise_reduction: near_field`(VADと文字起こしの
 手前で入力を掃除する)。机を叩くなどの衝撃音を発話と誤認するのを抑える。両回線共通
 (`build_session_config` で埋め込むため、WS中継でもWebRTC直結でも効く)。
+
+## 9. コンテナ構成(ローカル)
+
+「terraform applyしたらサービスが立つ」への段階1。イメージには**コードだけ**を焼き、秘密(.env)と状態(履歴DB)は外から与える。
+
+```mermaid
+flowchart LR
+    subgraph Image["Dockerイメージ (uvベース Python 3.12)"]
+        BE["/app/backend<br/>(uv syncで固定した依存+コード)"]
+        FE["/app/frontend<br/>(静的ファイル)"]
+    end
+    ENV[".env<br/>(env_fileで注入・焼き込まない)"] --> BE
+    VOL[("named volume chat-history<br/>→ /data/chat_history.db")] <--> BE
+    U["ブラウザ :8000"] --> BE
+```
+
+- 起動: `docker compose up --build`。ネイティブ起動(`uv run uvicorn`)と同じポート8000・同じ使い勝手
+- DBパスは環境変数 `DB_PATH` で外から差し替え可能(コンテナでは /data、ECS移行時はここをEFS等に付け替えるだけ)
+- コンテナ内のディレクトリ配置はリポジトリと同じ(backend/ が ../frontend を参照する相対関係を維持)
+- 段階2(ECS Fargate + Terraform)の論点はCLAUDE.mdのバックログ参照

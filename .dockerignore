@@ -1,0 +1,10 @@
+# 秘密と状態はイメージに入れない
+**/.env
+**/chat_history.db
+# ビルドに不要なもの
+**/__pycache__
+**/.venv
+.git
+infra/
+docs/
+README.md

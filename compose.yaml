@@ -1,0 +1,15 @@
+# ローカル起動: docker compose up --build (http://localhost:8000)
+# .env は backend/.env をそのまま注入(イメージには焼かれていない)
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - backend/.env
+    volumes:
+      # 会話履歴はコンテナを作り直しても消えないよう名前付きボリュームへ
+      - chat-history:/data
+
+volumes:
+  chat-history:
