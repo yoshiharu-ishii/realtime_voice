@@ -14,17 +14,19 @@ from personas import load_persona
 from relay import build_session_config
 
 
-async def mint_client_secret(persona_id: str) -> dict:
-    """ペルソナ設定を埋め込んだ一時キーを発行する(有効期限はOpenAI側の既定)。"""
+async def mint_client_secret(persona_id: str, mode: str = "ptt") -> dict:
+    """ペルソナ設定と会話モードを埋め込んだ一時キーを発行する(有効期限はOpenAI側の既定)。"""
     api_key = get_openai_api_key()
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY が .env に設定されていません")
+    if mode not in ("ptt", "vad"):
+        mode = "ptt"
     persona = load_persona(persona_id)
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             "https://api.openai.com/v1/realtime/client_secrets",
             headers={"Authorization": f"Bearer {api_key}"},
-            json={"session": build_session_config(persona)},
+            json={"session": build_session_config(persona, mode)},
         )
         resp.raise_for_status()
         data = resp.json()

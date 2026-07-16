@@ -18,13 +18,14 @@ Push-to-Talkのリアルタイム音声通話アプリ。ブラウザ ⇄ FastAP
 - **ポート8000はユーザーが自分のターミナルで起動する。Claudeの検証は8001を使い、終わったら必ず止める**
 - 検証は必ずエンドツーエンドで: 合成音声は `say -v Kyoko -o x.aiff "…" && afconvert -f WAVE -d LEI16@24000 -c 1 x.aiff x.wav`、WebSocketテストクライアントで append→commit→response.create を流す
 - 認証付きの検証: `aws cognito-idp admin-initiate-auth --auth-flow ADMIN_USER_PASSWORD_AUTH` でIDトークンを発行し、HTTPは `Authorization: Bearer`、ブラウザは `id_token` Cookieに注入。テストユーザーのパスワードが不明なら `admin-set-user-password --permanent` で再設定
-- ブラウザペインはマイク権限がないため、実マイクの録音テストはユーザーに依頼する。ただし**getUserMediaを差し替えれば偽マイクでE2E可能**: `AudioContext`+`createMediaStreamDestination()` のstreamを返すよう`navigator.mediaDevices.getUserMedia`を上書きし、sayで作ったWAVを`AudioBufferSourceNode`でdestへ再生するとWebRTC経由でも文字起こしまで検証できる(テスト用WAVは一時的にfrontend/へ置いて配信し、終わったら削除)
+- ブラウザペインはマイク権限がないため、実マイクの録音テストはユーザーに依頼する。ただし**getUserMediaを差し替えれば偽マイクでE2E可能**: `AudioContext`+`createMediaStreamDestination()` のstreamを返すよう`navigator.mediaDevices.getUserMedia`を上書きし、sayで作ったWAVを`AudioBufferSourceNode`でdestへ再生するとWebRTC経由でも文字起こしまで検証できる(テスト用WAVは一時的にfrontend/へ置いて配信し、終わったら削除)。**罠2つ**: (1) getUserMediaは呼ばれるたびに新しいdestを返すこと(同じstreamを返すと再接続時にstop済みの死んだトラックを配ってしまう) (2) destには**ゲイン0の発振器を常時接続しておく**こと(ソースが繋がっていない間はフレームが生成されず、WebRTCのRTPパケットが止まりserver_vadが凍る)
 - プレビューランチャー(launch.json)はサンドボックスがvenvを読めず使えない。Bashバックグラウンド起動+ブラウザで確認
 
 ## アーキテクチャの要点(ハマりどころ)
 
 - **中継サーバーが全イベントを見る**設計。ツール実行(web_search)・履歴保存・認証はここに差し込む。クライアントから転送するイベントはホワイトリスト制
-- **PTTなのでサーバーVADは無効**(turn_detection: null)。手動commit+response.create。commitには最低100ms必要
+- 会話モードは2つ(UIの「モード」、両回線と直交): **PTT**=turn_detection null+手動commit(最低100ms)+response.create / **VAD(ハンズフリー)**=server_vadが自動検知・自動応答・自動バージイン。VADは常時送信=無音も課金。ボタンはVADではミュートトグルになる。検索中は自動ミュート
+- 会話の文脈はOpenAIセッション内にあり、**再接続(ペルソナ/回線/モード切替・自動再接続)のたびにリセット**される。履歴DBから conversation.item.create でテキスト注入すれば文脈復元が可能(未実装・バックログ)
 - **音声は24kHz PCM16**。録音は24kHz AudioContext(ブラウザ内蔵リサンプラ)が主、ワークレットの面積平均リサンプラがフォールバック。線形補間だけに戻すとエイリアシングで認識が壊れる
 - **voiceは音声出力後に変更不可**。ペルソナ切替はWebSocket再接続(新セッション)で実現
 - **認証**: IDトークンはCookie。`GET /` はサーバー側で検証し、未認証には門番ページ(login.html)のみ返す。**`/` にCache-Control: no-storeは必須**(消すとログイン無限ループが再発する)。WebSocketは接続後最初の `proxy.auth` メッセージで認証(URLにトークンを載せない)
