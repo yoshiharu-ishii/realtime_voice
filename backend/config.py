@@ -8,7 +8,8 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent  # backend/
 FRONTEND_DIR = BASE_DIR.parent / "frontend"
 PERSONA_DIR = BASE_DIR / "personas"
-DB_PATH = BASE_DIR / "chat_history.db"
+# コンテナではボリューム(/data等)に逃がせるよう環境変数で上書き可能にする
+DB_PATH = Path(os.getenv("DB_PATH", BASE_DIR / "chat_history.db"))
 
 load_dotenv(BASE_DIR / ".env")
 

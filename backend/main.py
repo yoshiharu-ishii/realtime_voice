@@ -32,6 +32,12 @@ async def cache_control(request: Request, call_next):
     """キャッシュ制御。/ は認証状態でアプリと門番ページを出し分けるため、
     キャッシュされると「ログアウト時代の門番ページ」が使い回されて
     ログイン画面との無限ループになる。絶対にキャッシュさせない。"""
+    # 0.0.0.0 はサーバーの待ち受けアドレスで、ブラウザで開く場所ではない。
+    # このままだとCognitoのコールバックURL(localhost/127.0.0.1のみ登録)と
+    # 一致せず、ログイン画面が無限ループする。Dockerは --host 0.0.0.0 で
+    # 起動するため、起動ログのURLをクリックするとこの罠を踏む → localhostへ誘導
+    if request.url.hostname == "0.0.0.0":
+        return RedirectResponse(str(request.url).replace("0.0.0.0", "localhost", 1))
     response = await call_next(request)
     if request.url.path == "/":
         response.headers["Cache-Control"] = "no-store"
