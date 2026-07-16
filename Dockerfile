@@ -18,5 +18,7 @@ ENV DB_PATH=/data/chat_history.db
 RUN mkdir -p /data
 
 EXPOSE 8000
-# uv syncで作った .venv を直接使う(コンテナ内で再解決はしない)
-CMD ["/app/backend/.venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# uv syncで作った .venv を直接使う(コンテナ内で再解決はしない)。
+# uvicornが出す「0.0.0.0:8000」はコンテナ内部の待ち受け表示で、
+# ブラウザで開く場所ではない——という案内を先に出す(実際に2回ハマった罠)
+CMD ["/bin/sh", "-c", "echo '================================================================' && echo ' ブラウザで開くURL: http://localhost:<ホスト側ポート>' && echo '   docker compose up なら       -> http://localhost:8000' && echo '   docker run -p 8001:8000 なら -> http://localhost:8001' && echo ' (この下に出る 0.0.0.0:8000 はコンテナ内部の表示。開かないこと)' && echo '================================================================' && exec /app/backend/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000"]
