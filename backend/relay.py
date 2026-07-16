@@ -28,12 +28,19 @@ from personas import load_persona
 from search import WEB_SEARCH_TOOL, run_web_search
 
 
-def build_session_config(persona: dict) -> dict:
-    """Push-to-Talk 用のセッション設定(サーバーVADは無効化し、手動commitで区切る)。
+def build_session_config(persona: dict, mode: str = "ptt") -> dict:
+    """セッション設定。WebSocket中継では session.update に包んで送り、
+    WebRTC直結では一時キー(client_secrets)発行時に埋め込む。両回線で共通。
 
-    WebSocket中継では session.update に包んで送り、WebRTC直結では
-    一時キー(client_secrets)発行時に埋め込む。両モードで共通。
+    会話モード:
+      ptt — サーバーVADを無効化し、手動commitで発話を区切る(押して話す)
+      vad — サーバーVADが発話の始終を検知し、自動でcommit+応答する(ハンズフリー通話)
     """
+    if mode == "vad":
+        # 無音の区切り検知・自動応答・割り込み(バージイン)はOpenAI側が担う
+        turn_detection = {"type": "server_vad"}
+    else:
+        turn_detection = None
     return {
         "type": "realtime",
         "output_modalities": ["audio"],
@@ -43,7 +50,7 @@ def build_session_config(persona: dict) -> dict:
         "audio": {
             "input": {
                 "format": {"type": "audio/pcm", "rate": 24000},
-                "turn_detection": None,
+                "turn_detection": turn_detection,
                 "transcription": {"model": TRANSCRIBE_MODEL, "language": "ja"},
             },
             "output": {
@@ -54,8 +61,8 @@ def build_session_config(persona: dict) -> dict:
     }
 
 
-def session_update_event(persona: dict) -> dict:
-    return {"type": "session.update", "session": build_session_config(persona)}
+def session_update_event(persona: dict, mode: str = "ptt") -> dict:
+    return {"type": "session.update", "session": build_session_config(persona, mode)}
 
 
 async def relay(browser_ws: WebSocket) -> None:
@@ -80,6 +87,9 @@ async def relay(browser_ws: WebSocket) -> None:
             return
 
     persona = load_persona(browser_ws.query_params.get("persona", "default"))
+    mode = browser_ws.query_params.get("mode", "ptt")
+    if mode not in ("ptt", "vad"):
+        mode = "ptt"
 
     api_key = get_openai_api_key()
     if not api_key:
@@ -104,7 +114,7 @@ async def relay(browser_ws: WebSocket) -> None:
     session_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
 
     async with openai_ws:
-        await openai_ws.send(json.dumps(session_update_event(persona), ensure_ascii=False))
+        await openai_ws.send(json.dumps(session_update_event(persona, mode), ensure_ascii=False))
         await browser_ws.send_json(
             {
                 "type": "proxy.ready",

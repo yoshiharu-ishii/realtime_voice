@@ -64,10 +64,10 @@ def get_personas(user: dict = Depends(auth.require_auth)) -> list:
 
 @app.get("/api/webrtc/secret")
 async def webrtc_secret(
-    persona: str = "default", user: dict = Depends(auth.require_auth)
+    persona: str = "default", mode: str = "ptt", user: dict = Depends(auth.require_auth)
 ) -> dict:
     try:
-        return await webrtc.mint_client_secret(persona)
+        return await webrtc.mint_client_secret(persona, mode)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"一時キーの発行に失敗: {exc}")
 

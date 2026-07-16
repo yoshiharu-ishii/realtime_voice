@@ -103,7 +103,7 @@
       font-size: 0.9rem;
       flex-wrap: wrap;
     }
-    #persona, #mic, #transport {
+    #persona, #mic, #transport, #mode {
       flex: 1;
       min-width: 140px;
       max-width: 240px;
@@ -180,12 +180,17 @@
         <option value="webrtc" selected>WebRTC(直結・高精度)</option>
         <option value="ws">WebSocket(中継・全部見える)</option>
       </select>
+      <label for="mode">モード:</label>
+      <select id="mode">
+        <option value="ptt" selected>押して話す(PTT)</option>
+        <option value="vad">ハンズフリー通話(VAD)</option>
+      </select>
     </div>
     <div id="status">接続中…</div>
     <div id="transcript"></div>
     <div id="meterWrap"><div id="meterBar"></div></div>
     <button id="ptt" disabled>押している間だけ話す(またはスペースキー長押し)</button>
-    <p class="hint">ボタンを離すとAIが応答します。応答中に押すと割り込めます。</p>
+    <p class="hint" id="pttHint">ボタンを離すとAIが応答します。応答中に押すと割り込めます。</p>
   </div>
 
   <div id="view-history" hidden>

@@ -24,7 +24,8 @@ Push-to-Talkのリアルタイム音声通話アプリ。ブラウザ ⇄ FastAP
 ## アーキテクチャの要点(ハマりどころ)
 
 - **中継サーバーが全イベントを見る**設計。ツール実行(web_search)・履歴保存・認証はここに差し込む。クライアントから転送するイベントはホワイトリスト制
-- **PTTなのでサーバーVADは無効**(turn_detection: null)。手動commit+response.create。commitには最低100ms必要
+- 会話モードは2つ(UIの「モード」、両回線と直交): **PTT**=turn_detection null+手動commit(最低100ms)+response.create / **VAD(ハンズフリー)**=server_vadが自動検知・自動応答・自動バージイン。VADは常時送信=無音も課金。ボタンはVADではミュートトグルになる。検索中は自動ミュート
+- 会話の文脈はOpenAIセッション内にあり、**再接続(ペルソナ/回線/モード切替・自動再接続)のたびにリセット**される。履歴DBから conversation.item.create でテキスト注入すれば文脈復元が可能(未実装・バックログ)
 - **音声は24kHz PCM16**。録音は24kHz AudioContext(ブラウザ内蔵リサンプラ)が主、ワークレットの面積平均リサンプラがフォールバック。線形補間だけに戻すとエイリアシングで認識が壊れる
 - **voiceは音声出力後に変更不可**。ペルソナ切替はWebSocket再接続(新セッション)で実現
 - **認証**: IDトークンはCookie。`GET /` はサーバー側で検証し、未認証には門番ページ(login.html)のみ返す。**`/` にCache-Control: no-storeは必須**(消すとログイン無限ループが再発する)。WebSocketは接続後最初の `proxy.auth` メッセージで認証(URLにトークンを載せない)

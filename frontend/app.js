@@ -90,16 +90,49 @@ function logout() {
 document.getElementById('logoutBtn').addEventListener('click', logout);
 let responseActive = false; // AIの応答が進行中か(response.cancel の送信判断に使う)
 let searching = false; // Web検索の実行中か(完了までPTTをロックする)
+let vadMuted = false; // ハンズフリー通話モードのミュート状態
 let searchUnlockTimer = null;
 const personaSel = document.getElementById('persona');
 
 const PTT_LABEL = '押している間だけ話す(またはスペースキー長押し)';
+const PTT_HINT = 'ボタンを離すとAIが応答します。応答中に押すと割り込めます。';
+const VAD_HINT = 'ハンズフリー通話中。話しかけるだけで応答します(無音の間も音声を送信・課金されます)';
+
+// ボタンとヒントを会話モードに合わせて更新
+// (PTTモード=押して話すボタン、VADモード=ミュートトグル)
+function updatePttUi() {
+  const hint = document.getElementById('pttHint');
+  if (isHandsFree()) {
+    pttBtn.classList.toggle('talking', !vadMuted && !pttBtn.disabled);
+    pttBtn.textContent = vadMuted
+      ? '🔇 ミュート中(クリックで解除)'
+      : '📞 通話中 — クリックでミュート';
+    hint.textContent = VAD_HINT;
+  } else {
+    pttBtn.classList.remove('talking');
+    pttBtn.textContent = PTT_LABEL;
+    hint.textContent = PTT_HINT;
+  }
+}
+
+function toggleMute() {
+  if (pttBtn.disabled) return;
+  vadMuted = !vadMuted;
+  if (isWebRTC()) webrtcSetMic(!vadMuted);
+  // WSモードはワークレット送信ガードが vadMuted を見る
+  if (vadMuted) meterBar.style.width = '0%';
+  setStatus(vadMuted ? '🔇 ミュート中(相手には何も聞こえていません)' : '📞 通話中(ハンズフリー)');
+  updatePttUi();
+}
 
 function setSearchLock(on) {
   searching = on;
   // 回線の接続状態はトランスポート共通の判定を使う(WS前提の !ws チェックだと
   // WebRTCモードで解除時も常にdisabledになるバグがあった)
   pttBtn.disabled = on || !transportConnected();
+  // ハンズフリー通話中は検索の間だけ自動ミュート(検索結果と新しい発話の混線防止。
+  // WSモードはワークレット送信ガードが searching を見る)
+  if (isHandsFree() && isWebRTC()) webrtcSetMic(!on && !vadMuted);
   if (on) {
     pttBtn.textContent = '🔍 検索中…(終わるまで待ってね)';
     // 万一完了イベントを取りこぼしても永久ロックにならないよう保険
@@ -107,7 +140,7 @@ function setSearchLock(on) {
     searchUnlockTimer = setTimeout(() => setSearchLock(false), 90000);
   } else {
     clearTimeout(searchUnlockTimer);
-    if (!talking) pttBtn.textContent = PTT_LABEL;
+    if (!talking) updatePttUi(); // モードに応じたラベルへ復元
   }
 }
 let sentSamples = 0; // commit には最低 100ms(2400サンプル)必要
@@ -203,7 +236,9 @@ async function setupCapture() {
   node.port.onmessage = (e) => {
     const f32 = e.data;
     updateMeter(f32); // 録音中は常にレベルインジケーターを更新
-    if (!talking || !ws || ws.readyState !== WebSocket.OPEN) return;
+    // 送信条件: PTTモード=押している間 / VADモード=ミュート解除中は常時(検索中を除く)
+    const streaming = talking || (isHandsFree() && !vadMuted && !searching && !isWebRTC());
+    if (!streaming || !ws || ws.readyState !== WebSocket.OPEN) return;
     const i16 = new Int16Array(f32.length);
     for (let i = 0; i < f32.length; i++) {
       const s = Math.max(-1, Math.min(1, f32[i]));
@@ -310,6 +345,23 @@ function handleServerEvent(ev) {
     case 'proxy.ready':
       setStatus(`接続完了 (model: ${ev.model} / ペルソナ: ${ev.persona || '標準'})`);
       pttBtn.disabled = false;
+      updatePttUi();
+      // ハンズフリー×WS中継: 接続できたら即マイクを開いて流し始める
+      if (isHandsFree() && !isWebRTC() && !captureReady) {
+        setupCapture().catch((err) =>
+          setStatus(`マイクを使用できません: ${err.message}`, true)
+        );
+      }
+      break;
+    // サーバーVAD(ハンズフリー)のターン検知イベント
+    case 'input_audio_buffer.speech_started':
+      if (isHandsFree()) {
+        stopPlayback(); // バージイン: こちらが話し始めたら再生を止める(WS用)
+        setStatus('🎙️ 聞き取り中…');
+      }
+      break;
+    case 'input_audio_buffer.speech_stopped':
+      if (isHandsFree()) setStatus('考え中…');
       break;
     case 'proxy.search': {
       setStatus(`🔍 Web検索中: ${ev.query}`);
@@ -420,6 +472,7 @@ function connect() {
   responseActive = false;
   searching = false; // 検索ロックも解除(旧セッションの検索結果は届かない)
   clearTimeout(searchUnlockTimer);
+  vadMuted = false; // 新しいセッションはミュート解除から
   if (talking) { // マイク押下中に切り替わった場合は録音状態も解除
     talking = false;
     pttBtn.classList.remove('talking');
@@ -434,7 +487,8 @@ function connect() {
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const persona = encodeURIComponent(personaSel.value || 'default');
-  ws = new WebSocket(`${proto}://${location.host}/ws?persona=${persona}`);
+  const mode = encodeURIComponent(modeSel.value || 'ptt');
+  ws = new WebSocket(`${proto}://${location.host}/ws?persona=${persona}&mode=${mode}`);
 
   ws.onopen = () => {
     // 認証有効時は最初のメッセージでトークンを提示(サーバーが検証するまで
@@ -607,9 +661,14 @@ document.querySelectorAll('.tab').forEach((btn) => {
 });
 document.getElementById('reloadHistory').addEventListener('click', loadHistory);
 
-pttBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); startTalking(); });
-pttBtn.addEventListener('pointerup', stopTalking);
-pttBtn.addEventListener('pointerleave', stopTalking);
+// PTTモード: 押している間だけ録音 / VADモード: クリックでミュートトグル
+pttBtn.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (!isHandsFree()) startTalking();
+});
+pttBtn.addEventListener('pointerup', () => { if (!isHandsFree()) stopTalking(); });
+pttBtn.addEventListener('pointerleave', () => { if (!isHandsFree()) stopTalking(); });
+pttBtn.addEventListener('click', () => { if (isHandsFree()) toggleMute(); });
 // セレクトやボタンにフォーカスがある間は、スペースはその部品の操作
 // (ドロップダウンを開く等)なのでPTTに使わない。ペルソナ切替の連打事故防止
 function isFormControlFocused() {
@@ -620,13 +679,14 @@ function isFormControlFocused() {
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && !e.repeat && !isFormControlFocused()) {
     e.preventDefault();
-    startTalking();
+    if (isHandsFree()) toggleMute(); // VADモードはスペースでミュートトグル
+    else startTalking();
   }
 });
 window.addEventListener('keyup', (e) => {
   if (e.code === 'Space' && !isFormControlFocused()) {
     e.preventDefault();
-    stopTalking();
+    if (!isHandsFree()) stopTalking();
   }
 });
 
@@ -668,6 +728,16 @@ transportSel.addEventListener('change', () => {
   connect();
 });
 
+// ---- 会話モード(PTT/ハンズフリー)切り替え ----
+modeSel.addEventListener('change', () => {
+  modeSel.blur();
+  localStorage.setItem('mode', modeSel.value);
+  const label = modeSel.selectedOptions[0]?.textContent || modeSel.value;
+  appendTurn('⚙️').textContent = `モードを「${label}」に切り替え(新しいセッションを開始)`;
+  stopPlayback();
+  connect();
+});
+
 (async () => {
   // 認可コード等のクエリが残っていたらアドレスバーと履歴から消す(保険。
   // 通常はサーバー側のリダイレクトで浄化される)
@@ -677,10 +747,14 @@ transportSel.addEventListener('change', () => {
   // ループガード用カウンタをリセットする
   sessionStorage.removeItem('auth_redirects');
   sessionStorage.removeItem('login_failures');
-  // 前回選んだ回線を復元
+  // 前回選んだ回線・会話モードを復元
   const savedTransport = localStorage.getItem('transport');
   if (savedTransport && [...transportSel.options].some((o) => o.value === savedTransport)) {
     transportSel.value = savedTransport;
+  }
+  const savedMode = localStorage.getItem('mode');
+  if (savedMode && [...modeSel.options].some((o) => o.value === savedMode)) {
+    modeSel.value = savedMode;
   }
   await initPersonas();
   connect();

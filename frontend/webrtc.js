@@ -5,6 +5,7 @@
 // (setStatus, handleServerEvent, authHeaders, personaSel など)を実行時に参照する。
 
 const transportSel = document.getElementById('transport');
+const modeSel = document.getElementById('mode');
 const remoteAudioEl = document.getElementById('remoteAudio');
 
 let pc = null; // RTCPeerConnection
@@ -16,6 +17,10 @@ let rtcMeterCtx = null;
 
 function isWebRTC() {
   return transportSel.value === 'webrtc';
+}
+
+function isHandsFree() {
+  return modeSel.value === 'vad';
 }
 
 function webrtcReady() {
@@ -39,7 +44,10 @@ async function connectWebRTC() {
   let secret;
   try {
     const persona = encodeURIComponent(personaSel.value || 'default');
-    const res = await fetch(`/api/webrtc/secret?persona=${persona}`, { headers: authHeaders() });
+    const mode = encodeURIComponent(modeSel.value || 'ptt');
+    const res = await fetch(`/api/webrtc/secret?persona=${persona}&mode=${mode}`, {
+      headers: authHeaders(),
+    });
     if (res.status === 401) { requireLogin(); return; }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     secret = await res.json();
@@ -77,6 +85,10 @@ async function connectWebRTC() {
     rtcReady = true;
     setStatus(`接続完了 (model: ${secret.model} / ペルソナ: ${secret.persona} / WebRTC直結)`);
     pttBtn.disabled = false;
+    // ハンズフリー通話モードなら即マイクON(ミュート中を除く)。
+    // バージイン(応答中の割り込み)はserver_vadがOpenAI側で処理する
+    if (isHandsFree()) webrtcSetMic(!vadMuted);
+    updatePttUi();
   };
   pc.onconnectionstatechange = () => {
     if (['failed', 'disconnected', 'closed'].includes(pc?.connectionState) && rtcReady) {
