@@ -409,6 +409,10 @@ function connect() {
     ws = null;
   }
   teardownWebRTC(); // WebRTC側の旧接続も必ず始末(電話は常に1本)
+  // 録音チェーンもセッションごとに作り直す。使い回すと、何セッションも前の
+  // デバイス選択・OS音声処理の状態で話し続けることになり、回線を切り替えた
+  // ときにWS側だけ音質が古い状態に取り残される(実際に起きた)
+  teardownCapture();
   // 前のセッションの表示・再生状態をリセット
   stopPlayback();
   currentAiTurn = null;
