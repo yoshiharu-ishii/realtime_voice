@@ -83,18 +83,20 @@ env_file として注入し(イメージには焼き込まない)、会話履歴
 ボリューム `chat-history`(コンテナ内 `/data`)に永続化されるため、
 コンテナを作り直しても残る。DBの置き場は環境変数 `DB_PATH` で変更可能。
 
-別ポートで検証用に立てる場合(開発中の約束事: 検証は8001):
+composeを使わず手で立てる場合もポートは8000に揃える(ログとURLが一致して迷わない):
 
 ```bash
 docker build -t realtime-voice .
-docker run --rm -p 8001:8000 --env-file backend/.env realtime-voice
-# → 開くのは http://localhost:8001 (-p の左側がホスト側ポート)
+docker run --rm -p 8000:8000 --env-file backend/.env realtime-voice
+# → http://localhost:8000
 ```
 
+8000が使用中のとき(開発中の約束事: 検証は8001)は `-p 8001:8000` にして
+`http://localhost:8001` を開く(**`-p` の左側がホスト側ポート**)。
+
 **注意**: uvicornの起動ログに出る `http://0.0.0.0:8000` は**コンテナ内部の待ち受け表示**であり、
-ブラウザで開くURLではない(ポートもコンテナ内部の番号)。開くのは常に
-`http://localhost:<ホスト側ポート>`。万一 `0.0.0.0` で開いてもサーバーがlocalhostへ
-リダイレクトする(ホスト側ポートが一致している場合のみ届く)。
+ブラウザで開くURLではない。開くのは常に `http://localhost:<ホスト側ポート>`。
+万一 `0.0.0.0` で開いてもサーバーがlocalhostへリダイレクトする。
 
 ブラウザで http://localhost:8000 を開き、ボタン(またはスペースキー)を
 押している間だけ話す。マイク許可が必要。
