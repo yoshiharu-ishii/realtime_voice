@@ -37,8 +37,10 @@ def build_session_config(persona: dict, mode: str = "ptt") -> dict:
       vad — サーバーVADが発話の始終を検知し、自動でcommit+応答する(ハンズフリー通話)
     """
     if mode == "vad":
-        # 無音の区切り検知・自動応答・割り込み(バージイン)はOpenAI側が担う
-        turn_detection = {"type": "server_vad"}
+        # 発話の区切り検知・自動応答・割り込み(バージイン)はOpenAI側が担う。
+        # server_vad(無音500msで機械的に区切る)だと息継ぎで文が分割されて
+        # 応答が二重に出るため、文の完結を意味で判断する semantic_vad を使う
+        turn_detection = {"type": "semantic_vad"}
     else:
         turn_detection = None
     return {
