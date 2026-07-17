@@ -1,7 +1,9 @@
-# realtime_voice の認証インフラ (Amazon Cognito)
+# 認証基盤 (Amazon Cognito) — 実行基盤(../service)とはstateを分離している。
 #
-# もともと AWS CLI で作ったリソースを import してコード管理に移行したもの。
-# 新しい環境にゼロから作る場合もこの構成がそのまま使える。
+# 分離の理由: User Poolは「ユーザー登録」というデータを持つ層であり、
+# 実行基盤の作り直し(terraform destroy)に巻き込まれてはならない。
+# 実際に一度、ターゲットなしのdestroyでユーザーごと消す事故が起きた。
+# こちらのディレクトリでは原則destroyしないこと。
 
 terraform {
   required_version = ">= 1.5"
@@ -22,12 +24,28 @@ resource "aws_cognito_user_pool" "this" {
   user_pool_tier           = "ESSENTIALS"
   username_attributes      = ["email"]
   auto_verified_attributes = ["email"]
-  deletion_protection      = "INACTIVE"
+  deletion_protection      = "ACTIVE" # 事故対策: destroyやコンソール操作での削除を拒否する
   mfa_configuration        = "OFF"
 
   # セルフサインアップ禁止(ユーザー作成は管理者のみ)
   admin_create_user_config {
     allow_admin_create_user_only = true
+
+    # 招待メールの文面をカスタム。既定文面は一時パスワードの直後に
+    # 文末ピリオドが付いており、コピーで巻き込んでログインに失敗する
+    # 事故が実際に起きた。パスワードは独立した行に置き、末尾に何も付けない
+    invite_message_template {
+      email_subject = "realtime-voice への招待"
+      email_message = <<-EOT
+        realtime-voice に招待されました。<br><br>
+        ユーザー名: {username}<br>
+        一時パスワード(この行をそのままコピー):<br>
+        {####}<br><br>
+        https://voice.pocraft.net にアクセスし、上記でログインすると
+        新しいパスワードの設定を求められます。
+      EOT
+      sms_message   = "ユーザー名 {username} 一時パスワード {####}"
+    }
   }
 
   password_policy {
@@ -49,8 +67,9 @@ resource "aws_cognito_user_pool_client" "web" {
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_scopes                 = ["email", "openid", "profile"]
-  callback_urls                        = var.app_urls
-  logout_urls                          = var.app_urls
+  # ローカル開発用URL + 本番サービスURL(完全一致で検証される)
+  callback_urls = concat(var.app_urls, ["https://${var.service_domain}/"])
+  logout_urls   = concat(var.app_urls, ["https://${var.service_domain}/"])
   supported_identity_providers         = ["COGNITO"]
 
   explicit_auth_flows = [

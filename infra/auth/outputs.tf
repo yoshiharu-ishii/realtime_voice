@@ -6,6 +6,10 @@ output "client_id" {
   value = aws_cognito_user_pool_client.web.id
 }
 
+output "cognito_domain_url" {
+  value = "https://${aws_cognito_user_pool_domain.this.domain}.auth.${var.region}.amazoncognito.com"
+}
+
 output "cognito_env" {
   description = "アプリの .env にそのまま貼れる形式"
   value       = <<-EOT

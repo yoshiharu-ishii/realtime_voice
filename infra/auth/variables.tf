@@ -5,7 +5,7 @@ variable "region" {
 }
 
 variable "app_urls" {
-  description = "OAuthのコールバック/ログアウト先URL(完全一致で検証される)"
+  description = "OAuthのコールバック/ログアウト先URL(ローカル開発用)"
   type        = list(string)
   default = [
     "http://127.0.0.1:8000/",
@@ -19,4 +19,10 @@ variable "domain_prefix" {
   description = "Hosted UIのドメインプレフィックス(グローバルで一意)"
   type        = string
   default     = "rtv-auth-051961177429"
+}
+
+variable "service_domain" {
+  description = "本番サービスのドメイン(コールバックURLに追加される)"
+  type        = string
+  default     = "voice.pocraft.net"
 }

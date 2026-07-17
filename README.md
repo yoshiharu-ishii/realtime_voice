@@ -120,21 +120,27 @@ aws cognito-idp admin-set-user-password --user-pool-id <POOL_ID> \
   --username <メールアドレス> --password '<パスワード>' --permanent
 ```
 
-## インフラ (Terraform)
+## インフラ (Terraform) と本番デプロイ
 
-Cognito 一式(User Pool / アプリクライアント / Hosted UIドメイン)は
-`infra/` の Terraform で管理している。
+`infra/` の Terraformは**stateを分けた2スタック**(実行基盤のdestroyがユーザーデータに届かない構造):
+
+- **認証基盤** (`infra/auth`): Cognito一式(User Pool / アプリクライアント / Hosted UIドメイン)。deletion_protection有効
+- **サービス基盤** (`infra/service`): ECS Fargate + ALB + ACM + Route53 + EFS + ECR。
+  適用すると **https://voice.pocraft.net** でサービスが立つ
+  (構成: [docs/aws_architecture.md](docs/aws_architecture.md) /
+  手順: [docs/deployment.md](docs/deployment.md) / 図解: docs/architecture.md §10)
 
 ```bash
-cd infra
-terraform init
-terraform plan    # 差分確認
-terraform apply
-terraform output cognito_env   # .env に貼る値が出力される
+cd infra/auth && terraform init && terraform apply       # 認証基盤
+cd ../service && terraform init
+echo 'openai_api_key = "sk-..."' > secrets.auto.tfvars   # gitignore済み
+terraform apply                                          # 実行基盤一式が立つ
+cd ../.. && ./deploy.sh   # イメージbuild → ECR push → サービス起動
 ```
 
-新しい環境に作る場合は `variables.tf` の `domain_prefix`(グローバルで
-一意)を変えて apply し、`imports.tf` は削除する。state はローカル管理
-(gitignore済み)。
+以後のアプリ更新は `./deploy.sh` 一発。新しい環境に作る場合は
+`variables.tf` の `domain_prefix`(グローバルで一意)と `zone_name` /
+`service_domain` を変えて apply する。state はローカル管理(gitignore済み)。
 
-※ getUserMedia の制約上、localhost 以外で使う場合は HTTPS が必要。
+※ getUserMedia の制約上、localhost 以外で使う場合は HTTPS が必要
+(本番はACM証明書で対応済み。これが service.tf にALB+ACMがある理由)。
