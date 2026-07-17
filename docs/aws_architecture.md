@@ -67,10 +67,46 @@ flowchart LR
 
 各ホップは1つ前のセキュリティグループからの通信しか受けない。タスクとファイルシステムにはインターネットから直接届かない。
 
-## 本番における回線二方式
+## データの通信経路
 
-- **WebRTC(既定)**: 音声・イベントはブラウザ ⇄ OpenAI 直結。ALBを通るのは一時キー取得・検索代行・履歴送信だけ
-- **WebSocket(中継)**: すべてが ALB → Fargate → OpenAI を通る。`idle_timeout`のルールが守っているのはこちらの経路
+### 音声の経路は回線で全く違う
+
+**WebRTC回線(既定) — 音声はAWSを通らない。** ALBを通るのは制御系のHTTPSだけ。
+
+```mermaid
+flowchart LR
+    B["ブラウザ"] <==>|"音声: Opus / DTLS-SRTP (UDP)<br/>イベント: データチャネル"| OAI["OpenAI Realtime"]
+    B -.->|"HTTPS: ①一時キー取得<br/>②検索の実行代行 ③履歴送信"| ALB["ALB :443"]
+    ALB -.-> TASK["Fargateタスク"]
+    TASK -.->|"履歴を書き込み"| EFS[("EFS")]
+```
+
+**WebSocket回線 — すべてがAWSを通る。** `idle_timeout` のルールが守っているのはこちら。
+
+```mermaid
+flowchart LR
+    B["ブラウザ"] <-->|"WSS :443<br/>音声=base64 PCM16"| ALB["ALB<br/>(TLS終端)"]
+    ALB <-->|"HTTP/WS :8000<br/>(VPC内・平文)"| TASK["Fargateタスク<br/>(中継+履歴+検索)"]
+    TASK <-->|"WSS :443"| OAI["OpenAI Realtime"]
+    TASK -->|"NFS :2049<br/>(TLS: 転送時暗号化)"| EFS[("EFS")]
+```
+
+### 経路とプロトコルの一覧
+
+| データ | 経路 | プロトコル / ポート | 暗号化 |
+|---|---|---|---|
+| 音声(WebRTC回線) | ブラウザ ⇄ OpenAI 直結 | Opus over SRTP (UDP)、SDP交換はHTTPS | DTLS-SRTP |
+| イベント(WebRTC回線) | ブラウザ ⇄ OpenAI 直結 | WebRTCデータチャネル `oai-events` | DTLS |
+| 音声・イベント(WS回線) | ブラウザ → ALB → タスク → OpenAI | WSS:443 → HTTP/WS:8000 → WSS:443 | ALBでTLS終端。**ALB→タスク間はVPC内の平文**(SGでALBからのみ許可) |
+| ログイン | ブラウザ ⇄ Cognito Hosted UI | HTTPS(認可コード+PKCE) | TLS。トークンはCookie(ブラウザ)のみ |
+| JWT検証 | タスク → Cognito | HTTPS(JWKS取得、キャッシュあり) | TLS |
+| Web検索(function calling) | タスク → OpenAI Responses API | HTTPS | TLS |
+| 履歴(WS回線) | タスクがEFSへ直接書き込み | NFS:2049 | EFS転送時暗号化(TLS)+保存時暗号化 |
+| 履歴(WebRTC回線) | ブラウザ → ALB → タスク → EFS | HTTPS `/api/history/log` → NFS | TLS → EFS暗号化 |
+| OpenAI APIキー | SSM → タスク(起動時のみ) | HTTPS | TLS+KMS。ブラウザには一時キー`ek_`のみ(数分で失効) |
+| イメージ | ECR → タスク(起動時のみ) | HTTPS | TLS |
+
+補足: ALB→タスク間を平文HTTPにしているのは意図的な割り切り(VPC内・SGでALB以外から到達不可)。end-to-endのTLSが要件になったらタスク側に証明書を持たせるかService Connectを検討する。
 
 ## IAMロール
 
