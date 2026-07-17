@@ -1,12 +1,12 @@
 #!/bin/sh
 # デプロイ一発スクリプト: イメージbuild → ECRへpush → ECSサービス再起動。
-# 前提: infra/ で terraform apply 済み(ECR等が存在すること)。
+# 前提: infra/service で terraform apply 済み(ECR等が存在すること)。
 # Apple SiliconのビルドはARM64ネイティブ = Fargate(ARM64)にそのまま載る。
 set -eu
 cd "$(dirname "$0")"
 
-REGION=$(terraform -chdir=infra output -raw cognito_env | grep COGNITO_REGION | cut -d= -f2)
-REPO=$(terraform -chdir=infra output -raw ecr_repo_url)
+REGION=$(terraform -chdir=infra/service output -raw region)
+REPO=$(terraform -chdir=infra/service output -raw ecr_repo_url)
 REGISTRY=${REPO%%/*}
 
 echo "== build =="
@@ -21,4 +21,4 @@ aws ecs update-service --region "$REGION" \
   --cluster realtime-voice --service realtime-voice \
   --force-new-deployment --query 'service.deployments[0].status' --output text
 
-echo "== done: $(terraform -chdir=infra output -raw service_url) =="
+echo "== done: $(terraform -chdir=infra/service output -raw service_url) =="

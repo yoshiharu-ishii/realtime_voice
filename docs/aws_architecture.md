@@ -1,6 +1,6 @@
 # AWS構成
 
-本番環境の構成。すべて Terraform (`infra/`) で管理しており、`terraform apply` 一発で下記の全体が立ち上がり、ターゲット指定の `terraform destroy` で片付く。再現性は検証済み: サービス層全体を実際に破壊→ゼロから再構築し、手作業なしで復旧することを確認している。
+本番環境の構成。Terraformを認証基盤(`infra/auth`)と実行基盤(`infra/service`)の2スタックに分けて管理しており、実行基盤は `terraform apply` 一発で立ち上がり `destroy` 一発で片付く(ユーザーアカウントを持つ認証基盤には届かない)。再現性は検証済み: サービス層全体を実際に破壊→ゼロから再構築し、手作業なしで復旧することを確認している。
 
 稼働URL: **https://voice.pocraft.net**
 
@@ -53,7 +53,7 @@ flowchart TB
 | ロードバランサ | ALB、`idle_timeout = 400s` | uvicornのWebSocket ping間隔(既定20s)より必ず長くする。逆転するとハンズフリー(VAD)モードの長い無音でソケットが切られる |
 | 履歴DB | EFS上のSQLite(`/data`にマウント) | アプリはローカル開発と無変更——`DB_PATH`の向き先が変わるだけ。タスクの再起動・再デプロイをまたいで残る |
 | 秘密 | SSM SecureString → タスク起動時にECSが注入 | [deployment.md](deployment.md#シークレット) 参照 |
-| 認証 | 既存のCognito User Pool(Terraformの別レイヤー) | サービス層のteardownがユーザーアカウントに触れない分離。アプリクライアントのコールバックURLに `https://voice.pocraft.net/` を追加済み |
+| 認証 | Cognito User Pool(`infra/auth`として**stateごと分離**、deletion_protection=ACTIVE) | User Poolは「ユーザー登録」というデータを持つ層。実行基盤(`infra/service`)のdestroyが絶対に届かないようスタックを分けた(過去に巻き込み削除の事故あり)。コールバックURLに `https://voice.pocraft.net/` を登録 |
 | ログ | CloudWatch Logs、保持30日 | Fargateにおける`docker logs`相当 |
 
 ## セキュリティグループ(一方向の連鎖)

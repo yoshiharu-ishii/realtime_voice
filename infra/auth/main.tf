@@ -1,7 +1,9 @@
-# realtime_voice の認証インフラ (Amazon Cognito)
+# 認証基盤 (Amazon Cognito) — 実行基盤(../service)とはstateを分離している。
 #
-# もともと AWS CLI で作ったリソースを import してコード管理に移行したもの。
-# 新しい環境にゼロから作る場合もこの構成がそのまま使える。
+# 分離の理由: User Poolは「ユーザー登録」というデータを持つ層であり、
+# 実行基盤の作り直し(terraform destroy)に巻き込まれてはならない。
+# 実際に一度、ターゲットなしのdestroyでユーザーごと消す事故が起きた。
+# こちらのディレクトリでは原則destroyしないこと。
 
 terraform {
   required_version = ">= 1.5"
@@ -22,7 +24,7 @@ resource "aws_cognito_user_pool" "this" {
   user_pool_tier           = "ESSENTIALS"
   username_attributes      = ["email"]
   auto_verified_attributes = ["email"]
-  deletion_protection      = "INACTIVE"
+  deletion_protection      = "ACTIVE" # 事故対策: destroyやコンソール操作での削除を拒否する
   mfa_configuration        = "OFF"
 
   # セルフサインアップ禁止(ユーザー作成は管理者のみ)

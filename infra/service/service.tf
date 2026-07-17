@@ -329,9 +329,9 @@ resource "aws_ecs_task_definition" "app" {
     environment = [
       { name = "DB_PATH", value = "/data/chat_history.db" },
       { name = "COGNITO_REGION", value = var.region },
-      { name = "COGNITO_USER_POOL_ID", value = aws_cognito_user_pool.this.id },
-      { name = "COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.web.id },
-      { name = "COGNITO_DOMAIN", value = "https://${aws_cognito_user_pool_domain.this.domain}.auth.${var.region}.amazoncognito.com" },
+      { name = "COGNITO_USER_POOL_ID", value = data.terraform_remote_state.auth.outputs.user_pool_id },
+      { name = "COGNITO_CLIENT_ID", value = data.terraform_remote_state.auth.outputs.client_id },
+      { name = "COGNITO_DOMAIN", value = data.terraform_remote_state.auth.outputs.cognito_domain_url },
     ]
     secrets = [
       { name = "OPENAI_API_KEY", valueFrom = aws_ssm_parameter.openai_api_key.arn },

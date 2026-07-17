@@ -4,9 +4,10 @@ __pycache__/
 chat_history.db
 
 # Terraform
-infra/.terraform/
-infra/*.tfstate
-infra/*.tfstate.*
-infra/crash.log
-infra/secrets.auto.tfvars
-infra/tfplan
+infra/**/.terraform/
+infra/**/*.tfstate
+infra/**/*.tfstate.*
+infra/**/crash.log
+infra/**/secrets.auto.tfvars
+infra/**/tfplan
+*.env.bak

@@ -10,7 +10,7 @@ Push-to-Talkのリアルタイム音声通話アプリ。ブラウザ ⇄ FastAP
 - `backend/` — FastAPI。モジュール分割済み: `main.py`(組み立て+ルーティングのみ) / `config.py`(環境変数) / `auth.py`(Cognito) / `relay.py`(WebSocket中継の本体) / `webrtc.py`(WebRTC用一時キー発行) / `personas.py` / `history.py`(SQLite) / `search.py`(web_searchツール)。ペルソナ定義(personas/*.md)、uv管理(pyproject.toml)、`.env` と `chat_history.db` もここ(gitignore済み)
 - 回線は2方式: WebSocket中継(`relay.py`+`app.js`)とWebRTC直結(`webrtc.py`+`frontend/webrtc.js`)。UIの「回線」で切替。WebRTCではfunction callingと履歴保存を**ブラウザ側**が `/api/search` `/api/history/log` 経由で行う(docs/architecture.md §7)
 - `frontend/` — index.html / app.js / pcm-worklet.js / login.html。URLパスは `/static/...` のまま配信元だけこのディレクトリ
-- `infra/` — Terraform 2層: Cognito一式(main.tf)と本番サービス基盤(service.tf: ECS Fargate+ALB+ACM+Route53+EFS+ECR、図解§10)。stateはローカル(gitignore済み)。OPENAI_API_KEYは `secrets.auto.tfvars`(gitignore済み)→SSM SecureString経由。**本番: https://voice.pocraft.net、アプリ更新は `./deploy.sh` 一発**(build→ECR push→サービス再起動)
+- `infra/` — Terraformは**stateを分けた2スタック**: `auth/`(Cognito。**原則destroy禁止**、deletion_protection=ACTIVE。ユーザー登録というデータを持つ)と `service/`(ECS Fargate+ALB+ACM+Route53+EFS+ECR。何度壊してもよい。authをremote_state参照)。**ターゲットなしdestroyでUser Poolごと消した事故(2026-07-17)の再発防止**。OPENAI_API_KEYは `service/secrets.auto.tfvars`(gitignore)→SSM SecureString。**本番: https://voice.pocraft.net、アプリ更新は `./deploy.sh` 一発**
 
 ## 起動と検証の約束事
 

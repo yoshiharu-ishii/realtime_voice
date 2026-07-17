@@ -122,21 +122,20 @@ aws cognito-idp admin-set-user-password --user-pool-id <POOL_ID> \
 
 ## インフラ (Terraform) と本番デプロイ
 
-`infra/` の Terraform で2層を管理している:
+`infra/` の Terraformは**stateを分けた2スタック**(実行基盤のdestroyがユーザーデータに届かない構造):
 
-- **認証基盤** (main.tf): Cognito一式(User Pool / アプリクライアント / Hosted UIドメイン)
-- **サービス基盤** (service.tf): ECS Fargate + ALB + ACM + Route53 + EFS + ECR。
+- **認証基盤** (`infra/auth`): Cognito一式(User Pool / アプリクライアント / Hosted UIドメイン)。deletion_protection有効
+- **サービス基盤** (`infra/service`): ECS Fargate + ALB + ACM + Route53 + EFS + ECR。
   適用すると **https://voice.pocraft.net** でサービスが立つ
   (構成: [docs/aws_architecture.md](docs/aws_architecture.md) /
   手順: [docs/deployment.md](docs/deployment.md) / 図解: docs/architecture.md §10)
 
 ```bash
-cd infra
-terraform init
+cd infra/auth && terraform init && terraform apply       # 認証基盤
+cd ../service && terraform init
 echo 'openai_api_key = "sk-..."' > secrets.auto.tfvars   # gitignore済み
-terraform plan    # 差分確認
-terraform apply   # インフラ一式が立つ
-cd .. && ./deploy.sh   # イメージbuild → ECR push → サービス起動
+terraform apply                                          # 実行基盤一式が立つ
+cd ../.. && ./deploy.sh   # イメージbuild → ECR push → サービス起動
 ```
 
 以後のアプリ更新は `./deploy.sh` 一発。新しい環境に作る場合は

@@ -6,12 +6,8 @@ output "client_id" {
   value = aws_cognito_user_pool_client.web.id
 }
 
-output "service_url" {
-  value = "https://${var.service_domain}"
-}
-
-output "ecr_repo_url" {
-  value = aws_ecr_repository.app.repository_url
+output "cognito_domain_url" {
+  value = "https://${aws_cognito_user_pool_domain.this.domain}.auth.${var.region}.amazoncognito.com"
 }
 
 output "cognito_env" {
