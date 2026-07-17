@@ -126,7 +126,9 @@ aws cognito-idp admin-set-user-password --user-pool-id <POOL_ID> \
 
 - **認証基盤** (main.tf): Cognito一式(User Pool / アプリクライアント / Hosted UIドメイン)
 - **サービス基盤** (service.tf): ECS Fargate + ALB + ACM + Route53 + EFS + ECR。
-  適用すると **https://voice.pocraft.net** でサービスが立つ(図解は docs/architecture.md §10)
+  適用すると **https://voice.pocraft.net** でサービスが立つ
+  (構成: [docs/aws_architecture.md](docs/aws_architecture.md) /
+  手順: [docs/deployment.md](docs/deployment.md) / 図解: docs/architecture.md §10)
 
 ```bash
 cd infra
