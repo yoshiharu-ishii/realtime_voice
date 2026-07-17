@@ -8,3 +8,4 @@ infra/.terraform/
 infra/*.tfstate
 infra/*.tfstate.*
 infra/crash.log
+infra/secrets.auto.tfvars

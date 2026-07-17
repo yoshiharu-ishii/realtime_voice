@@ -49,8 +49,9 @@ resource "aws_cognito_user_pool_client" "web" {
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_scopes                 = ["email", "openid", "profile"]
-  callback_urls                        = var.app_urls
-  logout_urls                          = var.app_urls
+  # ローカル開発用URL + 本番サービスURL(完全一致で検証される)
+  callback_urls = concat(var.app_urls, ["https://${var.service_domain}/"])
+  logout_urls   = concat(var.app_urls, ["https://${var.service_domain}/"])
   supported_identity_providers         = ["COGNITO"]
 
   explicit_auth_flows = [

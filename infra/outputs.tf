@@ -6,6 +6,14 @@ output "client_id" {
   value = aws_cognito_user_pool_client.web.id
 }
 
+output "service_url" {
+  value = "https://${var.service_domain}"
+}
+
+output "ecr_repo_url" {
+  value = aws_ecr_repository.app.repository_url
+}
+
 output "cognito_env" {
   description = "アプリの .env にそのまま貼れる形式"
   value       = <<-EOT

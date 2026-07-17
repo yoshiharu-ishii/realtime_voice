@@ -232,3 +232,26 @@ flowchart LR
 - DBパスは環境変数 `DB_PATH` で外から差し替え可能(コンテナでは /data、ECS移行時はここをEFS等に付け替えるだけ)
 - コンテナ内のディレクトリ配置はリポジトリと同じ(backend/ が ../frontend を参照する相対関係を維持)
 - 段階2(ECS Fargate + Terraform)の論点はCLAUDE.mdのバックログ参照
+
+## 10. サービス構成(AWS / terraform apply一発)
+
+「terraform applyしたらサービスが立つ」の実体。https://voice.pocraft.net で稼働。
+
+```mermaid
+flowchart LR
+    U["ブラウザ<br/>voice.pocraft.net"] --> R53["Route53<br/>Aレコード(alias)"]
+    R53 --> ALB["ALB :443<br/>ACM証明書 / idle 400s<br/>(:80は301でhttpsへ)"]
+    ALB -->|"HTTP/WS :8000"| TASK["ECS Fargate (ARM64)<br/>app コンテナ"]
+    TASK <--> EFS[("EFS /data<br/>chat_history.db")]
+    TASK -. "起動時に取得" .-> SSM["SSM SecureString<br/>OPENAI_API_KEY"]
+    TASK -. "pull" .-> ECR["ECR<br/>realtime-voice:latest"]
+    TASK --> CW["CloudWatch Logs"]
+    TASK <--> OAI["OpenAI Realtime API"]
+    U -. "ログイン(PKCE)" .-> COG["Cognito Hosted UI<br/>(コールバックにhttpsのURLを追加)"]
+```
+
+- **https必須の理由**: マイク(getUserMedia)はセキュア文脈でしか使えない。ACM証明書はDNS検証で自動発行・自動更新
+- **WebSocketの生存条件**: ALB idle_timeout(400s) > uvicornのws ping間隔(既定20s)。逆転するとVADの長い無音で切られる
+- **秘密の経路**: OPENAI_API_KEYはSSM SecureString→タスク起動時に注入。COGNITO_*はTerraformのCognitoリソースから直接参照(二重管理なし)
+- **デプロイ**: 初回は `terraform apply` → `./deploy.sh`。以後の更新は `./deploy.sh` 一発(build→ECR push→サービス再起動)
+- **WebRTC回線は本番でも直結**: 音声はブラウザ⇄OpenAIで、ALBを通るのは一時キー取得・検索代行・履歴送信のみ。WS回線は音声もALBを通る
