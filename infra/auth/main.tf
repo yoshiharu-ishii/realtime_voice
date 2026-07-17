@@ -30,6 +30,22 @@ resource "aws_cognito_user_pool" "this" {
   # セルフサインアップ禁止(ユーザー作成は管理者のみ)
   admin_create_user_config {
     allow_admin_create_user_only = true
+
+    # 招待メールの文面をカスタム。既定文面は一時パスワードの直後に
+    # 文末ピリオドが付いており、コピーで巻き込んでログインに失敗する
+    # 事故が実際に起きた。パスワードは独立した行に置き、末尾に何も付けない
+    invite_message_template {
+      email_subject = "realtime-voice への招待"
+      email_message = <<-EOT
+        realtime-voice に招待されました。<br><br>
+        ユーザー名: {username}<br>
+        一時パスワード(この行をそのままコピー):<br>
+        {####}<br><br>
+        https://voice.pocraft.net にアクセスし、上記でログインすると
+        新しいパスワードの設定を求められます。
+      EOT
+      sms_message   = "ユーザー名 {username} 一時パスワード {####}"
+    }
   }
 
   password_policy {

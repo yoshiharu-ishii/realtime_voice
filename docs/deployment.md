@@ -93,3 +93,4 @@ terraform -chdir=infra/service destroy
 - **再構築直後にドメインが引けない**: Route53レコードが消えている間に名前を引いた端末は、NXDOMAINを**ネガティブキャッシュ**する(TTLはゾーンのSOAに従う——最大1日)。サービス自体は無事なので `dig voice.pocraft.net @8.8.8.8` で確認し、ローカルキャッシュを掃除(`sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`)するか待つ
 - **タスクが再起動を繰り返す**: `aws logs tail /ecs/realtime-voice --follow`。よくある犯人はECRにイメージがない(初回deploy前)か、SSM読み取りの拒否(実行ロールのポリシー)
 - **長い無音でWebSocketが切れる**: ALBの`idle_timeout`(400s)がuvicornのws ping間隔(既定20s)より長いままか確認
+- **招待メールの一時パスワードでログインできない**: 末尾のピリオドや空白を巻き込んでコピーしていないか確認(既定文面はパスワード直後に文末ピリオドが付く罠があり、実際に踏んだ。現在は文面をカスタムしてパスワードを独立行にしてある)。IMEの全角混入にも注意
