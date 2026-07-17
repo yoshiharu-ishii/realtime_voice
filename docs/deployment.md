@@ -54,7 +54,12 @@ terraform apply    # 実行基盤 約27リソース: ALB, ACM, ECS, EFS, ECR, SS
 cd ../.. && ./deploy.sh   # build → push → サービス起動
 ```
 
-auth適用後は `terraform output cognito_env` の値を `backend/.env` に反映し、ユーザーを `admin-create-user` で登録する(セルフサインアップ無効のため)。
+auth適用後は `terraform output cognito_env` の値を `backend/.env` に反映する。**ユーザーアカウントもTerraform管理**(`infra/auth/users.tf`にメールアドレスを足すだけ)で、applyでアカウントまで生える。手作業はパスワード設定の1コマンドのみ(パスワードをコード/stateに残さないための意図的な設計):
+
+```bash
+aws cognito-idp admin-set-user-password --user-pool-id <POOL_ID> \
+  --username <メールアドレス> --password '<パスワード>' --permanent
+```
 
 ACM証明書のDNS検証と初回タスク起動にそれぞれ数分かかる。`aws ecs wait services-stable` が返ればURLは生きている。
 
