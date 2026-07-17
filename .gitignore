@@ -11,3 +11,4 @@ infra/**/crash.log
 infra/**/secrets.auto.tfvars
 infra/**/tfplan
 *.env.bak
+.DS_Store
