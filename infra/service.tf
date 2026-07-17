@@ -36,6 +36,7 @@ resource "aws_ecr_repository" "app" {
 resource "aws_acm_certificate" "app" {
   domain_name       = var.service_domain
   validation_method = "DNS"
+  tags              = { Name = "realtime-voice" }
 
   lifecycle {
     create_before_destroy = true
@@ -195,6 +196,7 @@ resource "aws_route53_record" "app" {
 resource "aws_efs_file_system" "history" {
   creation_token = "realtime-voice-history"
   encrypted      = true
+  tags = { Name = "realtime-voice-history" } # コンソールで無名表示にならないように
 }
 
 resource "aws_efs_mount_target" "history" {
@@ -207,6 +209,7 @@ resource "aws_efs_mount_target" "history" {
 # コンテナはroot実行のため、uid/gid 0 のアクセスポイントで /history を切る
 resource "aws_efs_access_point" "history" {
   file_system_id = aws_efs_file_system.history.id
+  tags           = { Name = "realtime-voice-history" }
 
   posix_user {
     uid = 0
