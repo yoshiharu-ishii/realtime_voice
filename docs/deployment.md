@@ -1,26 +1,24 @@
-# Deployment
+# デプロイ手順
 
-How the realtime voice app gets from a laptop to **https://voice.pocraft.net**.
-Infrastructure lives in `infra/` (Terraform); application delivery is
-`./deploy.sh`. Architecture details: [aws_architecture.md](aws_architecture.md).
+手元のコードが **https://voice.pocraft.net** に届くまでの全経路。インフラは `infra/`(Terraform)、アプリの配送は `./deploy.sh`。構成の詳細は [aws_architecture.md](aws_architecture.md)。
 
-## Delivery pipeline
+## デリバリーパイプライン
 
 ```mermaid
 flowchart LR
-    subgraph Dev["Development loop"]
-        CODE["Edit code"] --> PR["Branch + PR<br/>(verification results in PR body)"]
-        PR --> MERGE["Merge to master"]
+    subgraph Dev["開発ループ"]
+        CODE["コードを書く"] --> PR["ブランチ + PR<br/>(検証結果をPR本文に)"]
+        PR --> MERGE["masterへマージ"]
     end
 
-    subgraph Infra["Infrastructure (when infra/ changed)"]
+    subgraph Infra["インフラ (infra/ を変えたときだけ)"]
         TF["terraform plan → apply"]
     end
 
-    subgraph Delivery["Application delivery (./deploy.sh)"]
-        BUILD["docker build (ARM64)"] --> PUSH["push to ECR<br/>realtime-voice:latest"]
+    subgraph Delivery["アプリ配送 (./deploy.sh)"]
+        BUILD["docker build (ARM64)"] --> PUSH["ECRへpush<br/>realtime-voice:latest"]
         PUSH --> ROLL["ecs update-service<br/>--force-new-deployment"]
-        ROLL --> HEALTH["ALB health check<br/>/api/auth/config"]
+        ROLL --> HEALTH["ALBヘルスチェック<br/>/api/auth/config"]
     end
 
     MERGE --> TF --> BUILD
@@ -28,58 +26,50 @@ flowchart LR
     HEALTH --> LIVE["https://voice.pocraft.net"]
 ```
 
-Today the pipeline is driven from the developer machine (one command per box
-group). The natural next step is a GitHub Actions workflow that runs
-`docker build` → ECR push → `update-service` on merge to `master`; the AWS-side
-shape would not change.
+現状はこのパイプラインを開発マシンから叩いている(各ボックス群がコマンド1つ)。次の自然な一手は、masterへのマージを契機に `docker build` → ECR push → `update-service` を回すGitHub Actions化。AWS側の形は変わらない。
 
-## Prerequisites
+## 前提
 
-- AWS credentials with rights for ECS/ECR/ALB/ACM/Route53/EFS/SSM/IAM/Cognito
-- A Route53 public hosted zone for the parent domain (`pocraft.net`)
-- Docker (Apple Silicon builds ARM64 natively — matches the Fargate task)
-- Terraform >= 1.5, uv (local dev only)
+- ECS/ECR/ALB/ACM/Route53/EFS/SSM/IAM/Cognito を扱えるAWS認証情報
+- 親ドメイン(`pocraft.net`)のRoute53パブリックホストゾーン
+- Docker(Apple SiliconはARM64をネイティブビルド——Fargateタスクとアーキテクチャ一致)
+- Terraform >= 1.5、uv(ローカル開発のみ)
 
-## First-time bring-up
+## 初回構築
 
 ```bash
 cd infra
 terraform init
-echo 'openai_api_key = "sk-..."' > secrets.auto.tfvars   # gitignored
-terraform plan     # review; the only change to auth layer is callback URLs
-terraform apply    # ~27 resources: ALB, ACM, ECS, EFS, ECR, SSM, IAM, DNS
+echo 'openai_api_key = "sk-..."' > secrets.auto.tfvars   # gitignore済み
+terraform plan     # 差分確認。認証レイヤーへの変更はコールバックURL追加のみのはず
+terraform apply    # 約27リソース: ALB, ACM, ECS, EFS, ECR, SSM, IAM, DNS
 cd ..
-./deploy.sh        # build → push → start the service
+./deploy.sh        # build → push → サービス起動
 ```
 
-DNS validation of the ACM certificate and the first task launch each take a few
-minutes. When `aws ecs wait services-stable` returns, the URL is live.
+ACM証明書のDNS検証と初回タスク起動にそれぞれ数分かかる。`aws ecs wait services-stable` が返ればURLは生きている。
 
-## Updating the app
+## アプリの更新
 
 ```bash
 ./deploy.sh
 ```
 
-That is the whole deployment: build, push `:latest`, force a new deployment,
-rolling replacement behind the ALB. Infrastructure changes go through
-`terraform plan` / `apply` separately (a clean tree must show `No changes`).
+これがデプロイの全部: build、`:latest` をpush、強制再デプロイ、ALBの後ろでローリング入れ替え。インフラ変更は別途 `terraform plan` / `apply` で(変更がないツリーでは `No changes` になること)。
 
-## Secrets
+## シークレット
 
-| Secret | At rest | In transit to the app | Notes |
+| 秘密 | 保管場所 | アプリへの経路 | 備考 |
 |---|---|---|---|
-| `OPENAI_API_KEY` | `backend/.env` (gitignored) locally; `infra/secrets.auto.tfvars` (gitignored) → SSM Parameter Store **SecureString** in AWS | ECS execution role reads the one parameter at task start and injects it as an env var | Never baked into the image (`.dockerignore` excludes `.env`); never sent to the browser — WebRTC clients only get ephemeral `ek_` keys that expire in minutes |
-| Cognito IDs (`COGNITO_*`) | Not secrets (public client + PKCE, no client secret exists) | Plain env vars, referenced directly from Terraform's Cognito resources | Single source of truth; no duplication with `.env` |
-| Cognito user passwords | Cognito only | — | Admin-created users; the E2E test user (`claude-e2e@…`) is the only account automation may reset |
+| `OPENAI_API_KEY` | ローカル: `backend/.env`(gitignore) / AWS: `infra/secrets.auto.tfvars`(gitignore) → SSM Parameter Store **SecureString** | タスク起動時にECS実行ロールがその1パラメータだけ読み、環境変数として注入 | イメージには焼かない(`.dockerignore`が`.env`を除外)。ブラウザにも渡らない——WebRTCクライアントが受け取るのは数分で失効する一時キー`ek_`のみ |
+| Cognito各種ID(`COGNITO_*`) | 秘密ではない(公開クライアント+PKCE。クライアントシークレット自体が存在しない) | TerraformのCognitoリソースから直接参照して平文envで注入 | 単一の情報源。`.env`との二重管理なし |
+| Cognitoユーザーのパスワード | Cognitoのみ | — | ユーザー作成は管理者のみ。自動化がリセットしてよいのはE2E専用ユーザー(`claude-e2e@…`)だけ |
 
-Known trade-offs, accepted for this project's size: the OpenAI key also appears
-in `terraform.tfstate` (local, gitignored) and the task-definition secret
-reference is visible (the ARN, not the value) in the AWS console.
+このプロジェクトの規模で許容した割り切り: OpenAIキーは `terraform.tfstate`(ローカル・gitignore)にも写る。またタスク定義にはシークレットの**参照(ARN)**が見える(値は見えない)。
 
-## Teardown
+## Teardown(完全削除)
 
-Service layer only (auth layer and its user accounts survive):
+サービス層のみ(認証レイヤーとユーザーアカウントは残す):
 
 ```bash
 cd infra
@@ -88,25 +78,12 @@ terraform state list | grep -v cognito | grep -v '^data\.' \
   | xargs terraform destroy -auto-approve
 ```
 
-Verified 2026-07-17: 26 resources destroyed (state kept only Cognito; ECS
-cluster INACTIVE; ALB/ECR/EFS gone; URL unreachable), then a fresh
-`terraform apply` + `./deploy.sh` restored the service and the end-to-end voice
-test passed again. `terraform destroy` with no targets removes everything
-including the user pool — only do that to leave no trace.
+2026-07-17に検証済み: 26リソースを削除(stateはCognitoのみ残存、ECSクラスタINACTIVE、ALB/ECR/EFS消滅、URL到達不可)→ まっさらな `terraform apply` + `./deploy.sh` でサービス復旧 → 音声E2E再合格。ターゲットなしの `terraform destroy` はUser Poolごと全部消す——痕跡を残さず撤収するときだけ使うこと。
 
-## Troubleshooting
+## トラブルシュート
 
-- **`docker login` fails with a macOS keychain error** (`already exists in the
-  keychain`): bypass the credential store with a throwaway config:
-  `export DOCKER_CONFIG=$(mktemp -d) && echo '{"auths":{}}' > $DOCKER_CONFIG/config.json`,
-  then log in and push again.
-- **Domain does not resolve right after a rebuild**: if anything queried the
-  name while the Route53 record was deleted, resolvers cache the NXDOMAIN
-  (negative TTL follows the zone's SOA — up to a day). The service is fine;
-  verify with `dig voice.pocraft.net @8.8.8.8` and flush the local cache
-  (`sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`) or wait.
-- **Task keeps restarting**: `aws logs tail /ecs/realtime-voice --follow`. The
-  usual suspects are a missing image in ECR (push before first deploy) or a
-  rejected SSM read (execution-role policy).
-- **WebSocket drops during long silences**: check that the ALB `idle_timeout`
-  (400s) still exceeds uvicorn's ws ping interval (20s default).
+- **`docker login` がmacOSキーチェーンのエラーで失敗する**(`already exists in the keychain`): 使い捨て設定で資格情報ストアを迂回する:
+  `export DOCKER_CONFIG=$(mktemp -d) && echo '{"auths":{}}' > $DOCKER_CONFIG/config.json` してから再ログイン・push
+- **再構築直後にドメインが引けない**: Route53レコードが消えている間に名前を引いた端末は、NXDOMAINを**ネガティブキャッシュ**する(TTLはゾーンのSOAに従う——最大1日)。サービス自体は無事なので `dig voice.pocraft.net @8.8.8.8` で確認し、ローカルキャッシュを掃除(`sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`)するか待つ
+- **タスクが再起動を繰り返す**: `aws logs tail /ecs/realtime-voice --follow`。よくある犯人はECRにイメージがない(初回deploy前)か、SSM読み取りの拒否(実行ロールのポリシー)
+- **長い無音でWebSocketが切れる**: ALBの`idle_timeout`(400s)がuvicornのws ping間隔(既定20s)より長いままか確認

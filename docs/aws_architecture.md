@@ -1,65 +1,62 @@
-# AWS Architecture
+# AWS構成
 
-Production architecture for the realtime voice app, managed entirely by Terraform
-(`infra/`). One `terraform apply` brings up everything below; one targeted
-`terraform destroy` tears it down. Reproducibility is verified: the whole service
-layer has been destroyed and rebuilt from scratch with no manual steps.
+本番環境の構成。すべて Terraform (`infra/`) で管理しており、`terraform apply` 一発で下記の全体が立ち上がり、ターゲット指定の `terraform destroy` で片付く。再現性は検証済み: サービス層全体を実際に破壊→ゼロから再構築し、手作業なしで復旧することを確認している。
 
-Live at: **https://voice.pocraft.net**
+稼働URL: **https://voice.pocraft.net**
 
-## Overview
+## 全体図
 
 ```mermaid
 flowchart TB
-    subgraph Internet
-        U["Browser<br/>(mic requires HTTPS)"]
+    subgraph Internet["インターネット"]
+        U["ブラウザ<br/>(マイクはHTTPS必須)"]
     end
 
     subgraph AWS["AWS (ap-northeast-1)"]
-        R53["Route53<br/>A alias: voice.pocraft.net"]
-        ACM["ACM certificate<br/>(DNS-validated, auto-renewed)"]
+        R53["Route53<br/>Aレコード(alias): voice.pocraft.net"]
+        ACM["ACM証明書<br/>(DNS検証・自動更新)"]
 
-        subgraph VPC["Default VPC (public subnets)"]
-            ALB["Application Load Balancer<br/>:443 HTTPS / :80 → 301<br/>idle_timeout = 400s"]
-            TASK["ECS Fargate task (ARM64)<br/>0.25 vCPU / 512 MB<br/>uvicorn :8000"]
+        subgraph VPC["デフォルトVPC (パブリックサブネット)"]
+            ALB["Application Load Balancer<br/>:443 HTTPS / :80は301<br/>idle_timeout = 400s"]
+            TASK["ECS Fargateタスク (ARM64)<br/>0.25 vCPU / 512 MB<br/>uvicorn :8000"]
             EFS[("EFS<br/>/data/chat_history.db")]
         end
 
         ECR["ECR<br/>realtime-voice:latest"]
         SSM["SSM Parameter Store<br/>SecureString: OPENAI_API_KEY"]
-        CW["CloudWatch Logs<br/>/ecs/realtime-voice (30d)"]
+        CW["CloudWatch Logs<br/>/ecs/realtime-voice (30日)"]
         COG["Cognito User Pool<br/>Hosted UI + PKCE"]
     end
 
     OAI["OpenAI Realtime API"]
 
     U -->|"DNS"| R53 --> ALB
-    ACM -.->|"TLS cert"| ALB
+    ACM -.->|"TLS証明書"| ALB
     ALB -->|"HTTP/WebSocket :8000"| TASK
     TASK <--> EFS
-    TASK -.->|"pull image (startup)"| ECR
-    TASK -.->|"inject secret (startup)"| SSM
+    TASK -.->|"イメージpull(起動時)"| ECR
+    TASK -.->|"秘密の注入(起動時)"| SSM
     TASK --> CW
-    TASK <-->|"WebSocket relay line"| OAI
-    U <-.->|"WebRTC line: audio/events direct"| OAI
-    U -.->|"login (PKCE)"| COG
-    TASK -.->|"verify JWT (JWKS)"| COG
+    TASK <-->|"WebSocket回線(中継)"| OAI
+    U <-.->|"WebRTC回線: 音声/イベント直結"| OAI
+    U -.->|"ログイン(PKCE)"| COG
+    TASK -.->|"JWT検証(JWKS)"| COG
 ```
 
-## Components and design decisions
+## コンポーネントと設計判断
 
-| Component | Choice | Why |
+| コンポーネント | 選択 | 理由 |
 |---|---|---|
-| Compute | ECS Fargate, ARM64, 0.25 vCPU / 512 MB | No servers to manage; ARM64 images build natively on Apple Silicon (no cross-build) and cost less |
-| Network | Default VPC, public subnets, task gets a public IP | Zero NAT gateway cost; acceptable for a demo service. Task is only reachable through the ALB security group |
-| TLS / domain | ACM certificate + Route53 alias | `getUserMedia` (microphone) only works in secure contexts — HTTPS is a hard requirement, not a nicety |
-| Load balancer | ALB with `idle_timeout = 400s` | Must exceed uvicorn's WebSocket ping interval (20s default). If the ALB timeout were shorter than the keepalive cadence, long silences in hands-free (VAD) mode would drop the socket |
-| History DB | SQLite on EFS, mounted at `/data` | The app is unchanged from local dev — only `DB_PATH` moves. Survives task restarts and redeployments |
-| Secrets | SSM SecureString → injected by ECS at task start | See [deployment.md](deployment.md#secrets) |
-| Auth | Existing Cognito User Pool (separate Terraform layer) | Service teardown never touches user accounts. The app client's callback URLs include `https://voice.pocraft.net/` |
-| Logs | CloudWatch Logs, 30-day retention | `docker logs` equivalent for Fargate |
+| コンピュート | ECS Fargate、ARM64、0.25vCPU/512MB | サーバー管理ゼロ。ARM64はApple Siliconの`docker build`がそのまま載り(クロスビルド不要)、料金も安い |
+| ネットワーク | デフォルトVPC、パブリックサブネット、タスクにパブリックIP | NATゲートウェイ代ゼロ(デモ用途では十分)。タスクへはALBのSG経由でしか届かない |
+| TLS/ドメイン | ACM証明書 + Route53 alias | `getUserMedia`(マイク)はセキュア文脈でしか動かない——HTTPSは飾りではなく**必須要件** |
+| ロードバランサ | ALB、`idle_timeout = 400s` | uvicornのWebSocket ping間隔(既定20s)より必ず長くする。逆転するとハンズフリー(VAD)モードの長い無音でソケットが切られる |
+| 履歴DB | EFS上のSQLite(`/data`にマウント) | アプリはローカル開発と無変更——`DB_PATH`の向き先が変わるだけ。タスクの再起動・再デプロイをまたいで残る |
+| 秘密 | SSM SecureString → タスク起動時にECSが注入 | [deployment.md](deployment.md#シークレット) 参照 |
+| 認証 | 既存のCognito User Pool(Terraformの別レイヤー) | サービス層のteardownがユーザーアカウントに触れない分離。アプリクライアントのコールバックURLに `https://voice.pocraft.net/` を追加済み |
+| ログ | CloudWatch Logs、保持30日 | Fargateにおける`docker logs`相当 |
 
-## Security groups (one-directional chain)
+## セキュリティグループ(一方向の連鎖)
 
 ```mermaid
 flowchart LR
@@ -68,25 +65,18 @@ flowchart LR
     SGTASK -->|":2049 (NFS)"| SGEFS["sg: realtime-voice-efs"]
 ```
 
-Each hop only accepts traffic from the previous security group, so the task and
-the file system are unreachable from the internet.
+各ホップは1つ前のセキュリティグループからの通信しか受けない。タスクとファイルシステムにはインターネットから直接届かない。
 
-## The two transport lines in production
+## 本番における回線二方式
 
-- **WebRTC (default)**: audio and events flow browser ⇄ OpenAI directly. The ALB
-  only carries the ephemeral-key request, search delegation, and history logging.
-- **WebSocket (relay)**: everything traverses ALB → Fargate → OpenAI. This is the
-  path the `idle_timeout` rule protects.
+- **WebRTC(既定)**: 音声・イベントはブラウザ ⇄ OpenAI 直結。ALBを通るのは一時キー取得・検索代行・履歴送信だけ
+- **WebSocket(中継)**: すべてが ALB → Fargate → OpenAI を通る。`idle_timeout`のルールが守っているのはこちらの経路
 
-## IAM roles
+## IAMロール
 
-- **Execution role**: pull from ECR, write CloudWatch Logs, read exactly one SSM
-  parameter (the OpenAI key). Used by the ECS agent, not the app.
-- **Task role**: empty. The app itself calls no AWS APIs at runtime.
+- **実行ロール**: ECRからのpull、CloudWatch Logsへの書き込み、SSMパラメータ**1個だけ**(OpenAIキー)の読み取り。使うのはECS基盤側で、アプリではない
+- **タスクロール**: 空。アプリは実行時にAWSのAPIを一切呼ばない
 
-## Cost (rough)
+## コスト(目安)
 
-ALB ~$20/mo + Fargate (1 task, 0.25 vCPU ARM64) ~$9/mo + EFS/logs/Route53 a few
-dollars → **~$30/mo**. To pause compute: set the service's desired count to 0
-(the ALB still bills). Full teardown: see
-[deployment.md](deployment.md#teardown).
+ALB 約$20/月 + Fargate(1タスク、0.25vCPU ARM64) 約$9/月 + EFS/ログ/Route53 数ドル → **月$30前後**。コンピュートだけ止めるならサービスのdesired countを0に(ALB代は残る)。完全撤収は [deployment.md](deployment.md#teardown完全削除) 参照。
