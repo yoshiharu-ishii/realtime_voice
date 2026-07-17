@@ -11,3 +11,9 @@ infra/**/crash.log
 infra/**/secrets.auto.tfvars
 infra/**/tfplan
 *.env.bak
+.DS_Store
+
+# デモ収録の中間ファイル
+docs/media/*.webm
+node_modules/
+package*.json

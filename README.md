@@ -6,6 +6,21 @@
 APIキーはサーバー側の `.env` にのみ保持し、ブラウザには一切渡らない
 (WebRTC回線でも、ブラウザに渡るのは数分で失効する一時キーのみ)。
 
+## デモ
+
+<img src="docs/media/demo.gif" alt="デモ: ハンズフリー通話からWeb検索まで(1.75倍速)" width="640" loading="lazy">
+
+ハンズフリー(VAD)モードで自然に会話し、必要に応じてWeb検索ツールが**自動発動**する様子の**実録**(演出なしのE2E)。
+人工音声がアプリに話しかけ、AIが音声で応答し、「今日の東京の天気」で検索→回答まで。
+🔊 音声付きデモ(55秒・1.1MB): [docs/media/demo.mp4](docs/media/demo.mp4)
+
+| ハンズフリー通話 | Web検索の発動 | 会話履歴 |
+|---|---|---|
+| ![通話](docs/media/shot_talk.png) | ![検索](docs/media/shot_search.png) | ![履歴](docs/media/shot_history.png) |
+
+このデモは [tools/record_demo.js](tools/record_demo.js) で自動収録している
+(偽マイク+ページ内録音でOS権限不要。手順はスクリプト冒頭のコメント参照)。
+
 ## 構成
 
 ```mermaid
