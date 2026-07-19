@@ -1,13 +1,13 @@
-// Push-to-Talk クライアント
-// 押している間: マイク音声を PCM16(24kHz) で WebSocket に送信
-// 離した時: input_audio_buffer.commit + response.create で応答を要求
-// 応答音声: PCM16(24kHz) の delta を Web Audio で順次再生
+// アプリ本体(UI・認証・ペルソナ・履歴・共通イベント処理)。
+// 回線の実装はプロトコルごとに分割:
+//   transport_ws.js     — WebSocket中継(接続・録音チェーン・PCM再生)
+//   transport_webrtc.js — WebRTC直結(SDP交換・一時キー・検索/履歴の代行)
+// 両トランスポートから届くイベントは handleServerEvent で共通処理する。
 
 const statusEl = document.getElementById('status');
 const pttBtn = document.getElementById('ptt');
 const transcriptEl = document.getElementById('transcript');
 
-let ws = null;
 let talking = false;
 let fatalError = false; // APIキー未設定など、再接続しても直らないエラー
 
@@ -145,52 +145,8 @@ function setSearchLock(on) {
 }
 let sentSamples = 0; // commit には最低 100ms(2400サンプル)必要
 
-// ---- 再生側 ----
-const playCtx = new (window.AudioContext || window.webkitAudioContext)();
-let playHead = 0; // 次のチャンクを再生する時刻
-let activeSources = [];
-
-function playPcm16Base64(b64) {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const pcm = new Int16Array(bytes.buffer);
-  if (pcm.length === 0) return;
-
-  const buf = playCtx.createBuffer(1, pcm.length, 24000);
-  const ch = buf.getChannelData(0);
-  for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
-
-  const src = playCtx.createBufferSource();
-  src.buffer = buf;
-  src.connect(playCtx.destination);
-  const now = playCtx.currentTime;
-  if (playHead < now) playHead = now + 0.02;
-  src.start(playHead);
-  playHead += buf.duration;
-  activeSources.push(src);
-  src.onended = () => { activeSources = activeSources.filter(s => s !== src); };
-}
-
-function stopPlayback() {
-  for (const src of activeSources) { try { src.stop(); } catch (_) {} }
-  activeSources = [];
-  playHead = 0;
-}
-
 // ---- 録音側 ----
-let captureReady = false;
-let captureStream = null;
-let captureCtx = null;
 const micSel = document.getElementById('mic');
-
-function teardownCapture() {
-  if (captureStream) captureStream.getTracks().forEach((t) => t.stop());
-  if (captureCtx) captureCtx.close().catch(() => {});
-  captureStream = null;
-  captureCtx = null;
-  captureReady = false;
-}
 
 // マイク取得(WS/WebRTC両モード共通。選択デバイス+フォールバック込み)
 async function getMicStream() {
@@ -216,46 +172,6 @@ async function getMicStream() {
     setStatus('選択したマイクが使えないため、既定のマイクに切り替えました');
     return stream;
   }
-}
-
-async function setupCapture() {
-  const stream = await getMicStream();
-  captureStream = stream;
-  // コンテキストは必ずネイティブレートで開き、24kHz化はワークレットの
-  // 面積平均リサンプラに任せる。以前は24kHz指定のコンテキストを優先していたが、
-  // レート強制はOS側のデバイス設定に介入するため、iPhone連携マイク等の
-  // 仮想デバイスで「実レートとラベルがずれた音声」になり、文字起こしが
-  // 完全に崩壊する(こもった声・無関係な文への作話)。WebRTC回線が無事なのは
-  // Chrome内蔵のWebRTCスタック(ネイティブレート)を使いこの経路を通らないため
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  console.log('capture sample rate:', ctx.sampleRate, '→ 24000 (worklet resample)');
-  await ctx.audioWorklet.addModule('/static/pcm-worklet.js');
-  const source = ctx.createMediaStreamSource(stream);
-  const node = new AudioWorkletNode(ctx, 'pcm-capture');
-  node.port.onmessage = (e) => {
-    const f32 = e.data;
-    updateMeter(f32); // 録音中は常にレベルインジケーターを更新
-    // 送信条件: PTTモード=押している間 / VADモード=ミュート解除中は常時(検索中を除く)
-    const streaming = talking || (isHandsFree() && !vadMuted && !searching && !isWebRTC());
-    if (!streaming || !ws || ws.readyState !== WebSocket.OPEN) return;
-    const i16 = new Int16Array(f32.length);
-    for (let i = 0; i < f32.length; i++) {
-      const s = Math.max(-1, Math.min(1, f32[i]));
-      i16[i] = s < 0 ? s * 32768 : s * 32767;
-    }
-    sentSamples += i16.length;
-    const bytes = new Uint8Array(i16.buffer);
-    let bin = '';
-    for (let i = 0; i < bytes.length; i += 8192) {
-      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
-    }
-    ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: btoa(bin) }));
-  };
-  source.connect(node);
-  captureCtx = ctx;
-  captureReady = true;
-  // 権限取得後はデバイスのラベルが読めるようになるので一覧を更新
-  initMics();
 }
 
 // ---- 入力レベルインジケーター(PTTボタン直上) ----
@@ -475,11 +391,7 @@ function connect() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
-  if (ws) {
-    ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
-    try { ws.close(); } catch (_) {}
-    ws = null;
-  }
+  teardownWS(); // WS側の旧接続を始末
   teardownWebRTC(); // WebRTC側の旧接続も必ず始末(電話は常に1本)
   // 録音チェーンもセッションごとに作り直す。使い回すと、何セッションも前の
   // デバイス選択・OS音声処理の状態で話し続けることになり、回線を切り替えた
@@ -505,49 +417,18 @@ function connect() {
     return;
   }
 
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const persona = encodeURIComponent(personaSel.value || 'default');
-  const mode = encodeURIComponent(modeSel.value || 'ptt');
-  ws = new WebSocket(`${proto}://${location.host}/ws?persona=${persona}&mode=${mode}`);
-
-  ws.onopen = () => {
-    // 認証有効時は最初のメッセージでトークンを提示(サーバーが検証するまで
-    // 他のイベントは受け付けられない)
-    if (authCfg.enabled) {
-      ws.send(JSON.stringify({ type: 'proxy.auth', token: idToken() }));
-    }
-    setStatus('サーバー接続OK。OpenAIへ接続中…');
-  };
-
-  ws.onmessage = (e) => {
-    let ev;
-    try { ev = JSON.parse(e.data); } catch (_) { return; }
-    handleServerEvent(ev);
-  };
-
-  ws.onclose = () => {
-    pttBtn.disabled = true;
-    responseActive = false;
-    if (fatalError) return; // 設定エラー時はメッセージを残し再接続しない
-    setStatus('切断されました。3秒後に再接続します…', true);
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    reconnectTimer = setTimeout(connect, 3000);
-  };
-  ws.onerror = () => { if (!fatalError) setStatus('WebSocketエラー', true); };
+  connectWS();
 }
 
 // ---- Push-to-Talk 操作 ----
 // 制御イベントの送信を回線で振り分ける(WS=中継へ、WebRTC=データチャネルへ)
 function sendEvent(obj) {
-  if (isWebRTC()) {
-    sendEventRTC(obj);
-  } else if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(obj));
-  }
+  if (isWebRTC()) sendEventRTC(obj);
+  else sendEventWS(obj);
 }
 
 function transportConnected() {
-  return isWebRTC() ? webrtcReady() : !!ws && ws.readyState === WebSocket.OPEN;
+  return isWebRTC() ? webrtcReady() : wsReady();
 }
 
 let pressStartedAt = 0; // WebRTCモードの「短すぎ判定」用(サンプル数を数えられないため)

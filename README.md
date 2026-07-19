@@ -62,9 +62,11 @@ flowchart LR
 ## ディレクトリ構成
 
 ```
-backend/    FastAPIサーバー(main=組み立て, relay=WS中継, webrtc=一時キー発行,
+backend/    FastAPIサーバー(main=組み立て, session=共通セッション設定,
+            transport_ws=WS中継, transport_webrtc=一時キー発行,
             auth=認証, personas, history, search, config に分割)、personas/、.env
-frontend/   ブラウザ側一式(index.html, app.js, webrtc.js, pcm-worklet.js, login.html)
+frontend/   app.js(UI・共通処理) + transport_ws.js / transport_webrtc.js
+            (回線実装をプロトコルで分割)、index.html, pcm-worklet.js, login.html
 infra/      Terraform(Cognito認証基盤)
 Dockerfile / compose.yaml   ローカルコンテナ起動(下記「起動」参照)
 ```
