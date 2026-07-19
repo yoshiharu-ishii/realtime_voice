@@ -4,7 +4,8 @@
 APIキーはサーバー側の .env にのみ保持し、ブラウザには渡さない。
 
 構成: config(設定) / auth(Cognito) / personas / history(SQLite) /
-search(web_searchツール) / relay(WebSocket中継)。このファイルは
+search(web_searchツール) / session(共通セッション設定) /
+transport_ws(WebSocket中継) / transport_webrtc(一時キー発行)。このファイルは
 FastAPIの組み立てとルーティングだけを持つ。
 """
 
@@ -17,9 +18,9 @@ from fastapi.staticfiles import StaticFiles
 import auth
 import history
 import personas
-import relay
 import search
-import webrtc
+import transport_webrtc
+import transport_ws
 from config import AUTH_ENABLED, FRONTEND_DIR, get_openai_api_key
 
 history.init_db()
@@ -73,7 +74,7 @@ async def webrtc_secret(
     persona: str = "default", mode: str = "ptt", user: dict = Depends(auth.require_auth)
 ) -> dict:
     try:
-        return await webrtc.mint_client_secret(persona, mode)
+        return await transport_webrtc.mint_client_secret(persona, mode)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"一時キーの発行に失敗: {exc}")
 
@@ -101,7 +102,7 @@ def api_history_log(body: dict, user: dict = Depends(auth.require_auth)) -> dict
     return {"ok": True}
 
 
-app.websocket("/ws")(relay.relay)
+app.websocket("/ws")(transport_ws.relay)
 
 
 @app.get("/")

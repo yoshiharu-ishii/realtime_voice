@@ -12,7 +12,7 @@ flowchart LR
         UI["UI<br/>PTTボタン / ペルソナ / 履歴"]
     end
 
-    subgraph Relay["FastAPI 中継サーバー (backend/ ※relay.py=中継, auth.py=認証, search.py=検索, history.py=履歴)"]
+    subgraph Relay["FastAPI 中継サーバー (backend/ ※transport_ws.py=WS中継, session.py=共通セッション設定, auth.py=認証, search.py=検索, history.py=履歴)"]
         WS["/ws WebSocket中継<br/>イベントのホワイトリスト転送"]
         AUTH["認証ゲート<br/>Cookie の IDトークンを検証"]
         DB[("SQLite<br/>chat_history.db")]

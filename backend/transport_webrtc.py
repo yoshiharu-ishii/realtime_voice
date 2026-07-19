@@ -1,4 +1,4 @@
-"""WebRTC直結モードのバックエンド支援。
+"""WebRTC回線: 一時キー(ephemeral client secret)の発行。
 
 WebSocket中継と違い、音声とイベントはブラウザとOpenAIが直接やり取りする。
 サーバーの役割は縮んで、(1) 一時キー(ephemeral client secret)の発行だけになる。
@@ -11,7 +11,7 @@ import httpx
 
 from config import REALTIME_MODEL, get_openai_api_key
 from personas import load_persona
-from relay import build_session_config
+from session import build_session_config
 
 
 async def mint_client_secret(persona_id: str, mode: str = "ptt") -> dict:

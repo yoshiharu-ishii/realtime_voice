@@ -1,9 +1,10 @@
-"""WebSocket中継(通訳者)。
+"""WebSocket回線: 中継サーバー(通訳者)。
 
 ブラウザとOpenAI Realtime APIの間に立ち、2つのループを並走させる:
   browser_to_openai: ブラウザの声を聞き続ける(ホワイトリスト検査して転送)
   openai_to_browser: OpenAIの声を聞き続ける(転送+履歴保存+ツール検知)
 どちらかの電話が切れたら、もう片方も必ず切る(切断は正常系)。
+セッション設定は session.py(両プロトコル共通)から取る。
 """
 
 import asyncio
@@ -20,55 +21,13 @@ from config import (
     AUTH_ENABLED,
     OPENAI_WS_URL,
     REALTIME_MODEL,
-    TRANSCRIBE_MODEL,
     get_openai_api_key,
 )
 from history import save_message
 from personas import load_persona
-from search import WEB_SEARCH_TOOL, run_web_search
+from search import run_web_search
+from session import session_update_event
 
-
-def build_session_config(persona: dict, mode: str = "ptt") -> dict:
-    """セッション設定。WebSocket中継では session.update に包んで送り、
-    WebRTC直結では一時キー(client_secrets)発行時に埋め込む。両回線で共通。
-
-    会話モード:
-      ptt — サーバーVADを無効化し、手動commitで発話を区切る(押して話す)
-      vad — サーバーVADが発話の始終を検知し、自動でcommit+応答する(ハンズフリー通話)
-    """
-    if mode == "vad":
-        # 発話の区切り検知・自動応答・割り込み(バージイン)はOpenAI側が担う。
-        # server_vad(無音500msで機械的に区切る)だと息継ぎで文が分割されて
-        # 応答が二重に出るため、文の完結を意味で判断する semantic_vad を使う
-        turn_detection = {"type": "semantic_vad"}
-    else:
-        turn_detection = None
-    return {
-        "type": "realtime",
-        "output_modalities": ["audio"],
-        "instructions": persona["instructions"],
-        "tools": [WEB_SEARCH_TOOL],
-        "tool_choice": "auto",
-        "audio": {
-            "input": {
-                "format": {"type": "audio/pcm", "rate": 24000},
-                # OpenAI側のノイズリダクション。VADと文字起こしの手前で入力を掃除し、
-                # 衝撃音(机を叩く・マイク接触など)を発話と誤検知するのを抑える。
-                # near_field は口元マイク(ヘッドセット・ノートPC)向けのプロファイル
-                "noise_reduction": {"type": "near_field"},
-                "turn_detection": turn_detection,
-                "transcription": {"model": TRANSCRIBE_MODEL, "language": "ja"},
-            },
-            "output": {
-                "format": {"type": "audio/pcm", "rate": 24000},
-                "voice": persona["voice"],
-            },
-        },
-    }
-
-
-def session_update_event(persona: dict, mode: str = "ptt") -> dict:
-    return {"type": "session.update", "session": build_session_config(persona, mode)}
 
 
 async def relay(browser_ws: WebSocket) -> None:
