@@ -57,6 +57,14 @@ async function connectWebRTC() {
     });
     if (stale()) return;
     if (res.status === 401) { requireLogin(); return; }
+    if (res.status === 429 || res.status === 403) {
+      // レート制限・一時停止はリトライしても回復しない。自動再接続で連打すると
+      // サーバー側のカウンタを押し上げてむしろ悪化する(実際に起きた)ため、
+      // メッセージを出して静かに止まる(ユーザーのリロードで再試行)
+      const detail = (await res.json().catch(() => ({})))?.detail;
+      setStatus(detail || '利用が集中しています。しばらくしてからページを再読み込みしてください', true);
+      return;
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     secret = await res.json();
     if (stale()) return;
